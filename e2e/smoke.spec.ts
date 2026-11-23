@@ -30,7 +30,7 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await expect(h1(page, /what does the client need/i)).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('button')).toHaveText(['New artwork', 'Jobs']);
   await expect(page.getByRole('tab', { name: /3D Artwork/ })).toBeDisabled();
-  await thumbsHaveSize(page, '.artwork-card svg[data-thumb]', 60);
+  await thumbsHaveSize(page, '.artwork-card [data-thumb]', 60);
   await noOverflow(page);
 
   await page.getByRole('tab', { name: 'Characters & VTubers' }).click();
@@ -40,7 +40,7 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
 
   // Step 2
   await expect(h1(page, /brief for mascot character/i)).toBeVisible();
-  await thumbsHaveSize(page, '.style-card svg[data-thumb]', 60);
+  await thumbsHaveSize(page, '.style-card [data-thumb]', 60);
   await noOverflow(page);
 
   await page.getByRole('button', { name: /send to production/i }).click();

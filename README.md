@@ -10,6 +10,10 @@ Three screens, nothing else:
 
 **3D** is listed as "coming soon": Photoshop and Illustrator are 2D tools, so 3D needs its own production pipeline before it can be offered.
 
+## Real thumbnails
+
+Every card ships with a simple drawn sketch. To show real artwork instead, put an image in `thumbnails/` named after the card (for example `stream-overlay.jpg` or `style-manga.png`). `thumbnails/README.md` lists all 56 file names. Cards without an image keep their sketch.
+
 ## Run
 
 ```

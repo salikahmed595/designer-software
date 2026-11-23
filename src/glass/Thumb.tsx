@@ -589,9 +589,28 @@ Object.assign(ART, {
 
 export const hasArt = (id: string): boolean => id in ART;
 
+/**
+ * Real example images. Drop a file into the project's `thumbnails/` folder, named after the card
+ * (e.g. `stream-overlay.jpg`, `style-manga.png`), and it replaces the drawn sketch for that card.
+ * Unknown names and non-image files are ignored. See thumbnails/README.md for the full list.
+ */
+export function indexThumbnails(files: Record<string, string>): Map<string, string> {
+  const photos = new Map<string, string>();
+  for (const [path, url] of Object.entries(files)) {
+    const match = /([^/\\]+)\.(png|jpe?g|webp)$/i.exec(path);
+    const id = match?.[1].toLowerCase();
+    if (id && hasArt(id)) photos.set(id, url);
+  }
+  return photos;
+}
+
+const PHOTOS = indexThumbnails(
+  import.meta.glob('/thumbnails/*.{png,jpg,jpeg,webp,PNG,JPG,JPEG,WEBP}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+);
+
 interface ThumbProps {
   id: string;
-  /** override colours (used by the live direction preview) */
+  /** colours for the drawn sketch (ignored when a real image exists) */
   a?: string;
   b?: string;
   className?: string;
@@ -599,6 +618,15 @@ interface ThumbProps {
 
 /** Decorative: every card that uses it also carries the artwork name as text. */
 export function Thumb({ id, a, b, className = '' }: ThumbProps) {
+  const photo = PHOTOS.get(id);
+  return photo ? (
+    <img data-thumb={id} src={photo} alt="" loading="lazy" decoding="async" className={`thumb-photo block w-full ${className}`} />
+  ) : (
+    <Sketch id={id} a={a} b={b} className={className} />
+  );
+}
+
+function Sketch({ id, a, b, className = '' }: ThumbProps) {
   const uid = `thumb${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
   const template = getTemplate(id);
   const category = template ? getCategory(template.categoryId) : CATEGORIES.find((c) => c.coverId === id);

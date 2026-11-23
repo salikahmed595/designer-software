@@ -256,3 +256,6 @@ button.reference-box:hover { border-color: var(--accent); background: rgba(255, 
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Real example images keep the same shape as the drawn sketches, so cards never jump. */
+.thumb-photo { aspect-ratio: 160 / 110; object-fit: cover; background: #12141b; }

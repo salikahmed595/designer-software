@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import App from './App';
 import { CATEGORIES, HOME_POPULAR, TEMPLATES } from './state/catalog';
 import { ART_STYLES } from './state/production';
-import { hasArt } from './glass/Thumb';
+import { hasArt, indexThumbnails } from './glass/Thumb';
 
 type Runner = 'claude' | 'off';
 
@@ -44,6 +44,19 @@ describe('thumbnails', () => {
     for (const t of TEMPLATES) expect(hasArt(t.id), t.id).toBe(true);
     for (const c of CATEGORIES) expect(hasArt(c.coverId), c.coverId).toBe(true);
     for (const s of ART_STYLES) expect(hasArt(`style-${s.id}`), s.id).toBe(true);
+  });
+
+  it('a real image in the thumbnails folder replaces the drawn sketch, matched by file name', () => {
+    const photos = indexThumbnails({
+      '/thumbnails/stream-overlay.jpg': '/assets/a.jpg',
+      '/thumbnails/Style-Manga.PNG': '/assets/b.png',
+      '/thumbnails/README.md': '/assets/readme',
+      '/thumbnails/not-a-real-artwork.webp': '/assets/c.webp',
+    });
+    expect(photos.get('stream-overlay')).toBe('/assets/a.jpg');
+    expect(photos.get('style-manga')).toBe('/assets/b.png');
+    expect(photos.has('readme')).toBe(false);
+    expect(photos.has('not-a-real-artwork')).toBe(false);
   });
 });
 
