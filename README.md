@@ -10,9 +10,13 @@ Three screens, nothing else:
 
 **3D** is listed as "coming soon": Photoshop and Illustrator are 2D tools, so 3D needs its own production pipeline before it can be offered.
 
-## Real thumbnails
+## Thumbnails
 
-Every card ships with a simple drawn sketch. To show real artwork instead, put an image in `thumbnails/` named after the card (for example `stream-overlay.jpg` or `style-manga.png`). `thumbnails/README.md` lists all 56 file names. Cards without an image keep their sketch.
+Every card shows an illustration from `thumbnails/` (56 SVG files: 40 artwork types, 16 art styles).
+
+- **Replace one with real studio work:** put a PNG, JPG, WebP or SVG in `thumbnails/` named after the card, for example `stream-overlay.jpg`. `thumbnails/README.md` lists every name. Remove the old `.svg` of the same name so there is only one file per card.
+- **Regenerate the drawn ones:** `npm run thumbnails`. The drawings are built from shared parts in `scripts/thumbs/` (one sample character, one mascot, common scenes), so a change there updates every card that uses it. Three files are hand-drawn and not regenerated: `stream-overlay`, `style-anime-cel`, `style-semi-real`.
+- If a card has no file, a simple built-in sketch is shown instead.
 
 ## Run
 

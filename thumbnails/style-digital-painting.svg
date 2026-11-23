@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 550" font-family="Segoe UI, Arial, sans-serif">
+<defs>
+<filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+<filter id="b2" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="2"/></filter>
+<filter id="b6" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="6"/></filter>
+<filter id="b14" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="14"/></filter>
+<filter id="b30" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="30"/></filter>
+<filter id="ds" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000" flood-opacity=".5"/></filter>
+<pattern id="chk" width="40" height="40" patternUnits="userSpaceOnUse"><rect width="40" height="40" fill="#1d1f29"/><rect width="20" height="20" fill="#272a37"/><rect x="20" y="20" width="20" height="20" fill="#272a37"/></pattern>
+<pattern id="dots" width="14" height="14" patternUnits="userSpaceOnUse"><circle cx="7" cy="7" r="2.600"/></pattern>
+<linearGradient id="neon" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b06bff"/><stop offset="1" stop-color="#4fe3ff"/></linearGradient>
+<linearGradient id="pk" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b06bff"/><stop offset="1" stop-color="#ff5fa8"/></linearGradient>
+<linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff2b0"/><stop offset=".5" stop-color="#ffc93c"/><stop offset="1" stop-color="#b8761a"/></linearGradient>
+<linearGradient id="silver" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#c3ccd8"/><stop offset="1" stop-color="#6f7a8c"/></linearGradient>
+<linearGradient id="bronze" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd0a0"/><stop offset=".5" stop-color="#d0854a"/><stop offset="1" stop-color="#7a4520"/></linearGradient>
+<linearGradient id="panel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#17132b" stop-opacity=".93"/><stop offset="1" stop-color="#0c0a18" stop-opacity=".96"/></linearGradient><linearGradient id="dsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0.00" stop-color="#1c1a4a"/><stop offset="0.33" stop-color="#5a3a8a"/><stop offset="0.67" stop-color="#e07a8a"/><stop offset="1.00" stop-color="#ffc58f"/></linearGradient><radialGradient id="dsun" cx="0.5" cy="0.5" r=".6"><stop offset="0" stop-color="#fff0c2"/><stop offset="1" stop-color="#ff9a6a" stop-opacity="0"/></radialGradient></defs>
+<rect width="800" height="550" fill="url(#dsky)"/><circle cx="560" cy="210" r="210" fill="url(#dsun)"/><circle cx="560" cy="210" r="60" fill="#fff4d6" filter="url(#b6)"/>
+<g filter="url(#b14)" opacity=".7"><ellipse cx="220" cy="150" rx="200" ry="26" fill="#ffb9a0"/><ellipse cx="640" cy="110" rx="180" ry="20" fill="#ffd9b0"/><ellipse cx="380" cy="230" rx="240" ry="18" fill="#c98ab8"/></g>
+<path d="M0 330l90-90 70 60 110-140 90 110 80-70 120 120 90-80 150 130v180H0z" fill="#6a5a9a" filter="url(#b2)"/>
+<path d="M0 330l90-90 40 34-60 120zM270 160l40 50-50 130zM540 230l50 50-40 100z" fill="#9a86c4" opacity=".6" filter="url(#b2)"/>
+<rect y="300" width="800" height="120" fill="#ffd9b0" opacity=".22" filter="url(#b30)"/>
+<path d="M0 400l140-70 110 50 130-80 150 70 110-50 160 70v160H0z" fill="#3a3066" filter="url(#b2)"/>
+<path d="M0 470l170-50 130 30 160-56 340 80v76H0z" fill="#191430"/>
+<g fill="#0e0b1e"><path d="M250 420l8-60 6-26 6 26 8 60z"/><path d="M256 366c-18 14-26 34-26 58 12-12 20-28 26-46z"/><circle cx="264" cy="326" r="10"/><path d="M272 352l44-30 3 5-42 36z"/></g>
+<path d="M316 322l22-15" stroke="#fff3cf" stroke-width="4" stroke-linecap="round" filter="url(#glow)"/>
+<g stroke="#fff" stroke-linecap="round" opacity=".28" filter="url(#b2)"><path d="M60 60c50-14 110-14 170 0M420 60c60-12 120-12 190 2M90 250c40-10 90-10 130 2" stroke-width="7" fill="none"/></g>
+<g fill="#1b1436"><path d="M640 470l16-70 16 70zM690 480l12-52 12 52zM90 480l14-60 14 60z"/></g>
+</svg>
