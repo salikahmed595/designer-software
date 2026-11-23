@@ -459,6 +459,80 @@ Object.assign(ART, {
   'style-chibi': ART['chibi-character'],
   'style-esports-mascot': ART['esports-logo'],
   'style-sticker': ART['sticker-pack'],
+  'style-manga': (a, b) => (
+    <>
+      {[0, 1, 2, 3, 4, 5, 6].flatMap((r) => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((c) => <circle key={`${r}-${c}`} cx={8 + c * 16 + (r % 2) * 8} cy={8 + r * 16} r="1.6" fill={b} opacity=".45" />))}
+      <path d="M4 12l34 20M2 40l30 8M156 12l-34 20M158 40l-30 8M10 96l28-14M150 96l-28-14" {...st(a, 1.6)} opacity=".7" />
+      <path d="M50 80c-10-40 8-66 30-66s40 26 30 66c-6-10-10-14-30-14s-24 4-30 14z" fill={D} stroke={a} strokeWidth="2.5" strokeLinejoin="round" />
+      <ellipse cx="80" cy="56" rx="22" ry="26" fill={a} />
+      <path d="M57 52c2-18 12-26 23-26s21 8 23 26c-6-10-10-13-14-14-2 6-8 10-18 10-6 0-10 2-14 4z" fill={D} />
+      <ellipse cx="70" cy="60" rx="5" ry="7" fill={D} /><ellipse cx="90" cy="60" rx="5" ry="7" fill={D} />
+      <circle cx="71.5" cy="57.5" r="1.9" fill="#fff" /><circle cx="91.5" cy="57.5" r="1.9" fill="#fff" />
+      <path d="M77 73h6" {...st(D, 1.8)} />
+    </>
+  ),
+  'style-pastel-anime': (a, b) => (
+    <>
+      <circle cx="30" cy="26" r="16" fill="#fff" opacity=".12" /><circle cx="134" cy="78" r="22" fill="#ffd9ec" opacity=".14" /><circle cx="126" cy="24" r="9" fill="#c9f2ff" opacity=".2" />
+      <path d="M48 84c-12-42 8-70 32-70s44 28 32 70c-6-12-12-16-32-16s-26 4-32 16z" fill={a} />
+      <path d="M66 96c0-12 6-18 14-18s14 6 14 18z" fill="#fff" opacity=".85" />
+      <ellipse cx="80" cy="54" rx="21" ry="25" fill={b} />
+      <ellipse cx="88" cy="58" rx="13" ry="19" fill="#f6b8cf" opacity=".28" />
+      <path d="M58 50c2-18 11-25 22-25s20 7 22 25c-8-9-13-12-22-12s-14 3-22 12z" fill={a} />
+      <path d="M62 34c6-6 12-8 18-8" {...st('#ffffff', 2)} opacity=".6" />
+      <ellipse cx="71" cy="57" rx="4.5" ry="6" fill="#6a5acd" /><ellipse cx="89" cy="57" rx="4.5" ry="6" fill="#6a5acd" />
+      <circle cx="72.5" cy="55" r="1.7" fill="#fff" /><circle cx="90.5" cy="55" r="1.7" fill="#fff" />
+      <circle cx="64" cy="66" r="4" fill="#ff9fc0" opacity=".55" /><circle cx="96" cy="66" r="4" fill="#ff9fc0" opacity=".55" />
+      <path d="M77 70q3 2 6 0" {...st('#b0627a', 1.6)} />
+    </>
+  ),
+  'style-cartoon': (a, b) => (
+    <>
+      <path d="M118 14l4 10 10 4-10 4-4 10-4-10-10-4 10-4z" fill={b} stroke={D} strokeWidth="2.5" strokeLinejoin="round" />
+      <path d="M48 28l8 16M112 30l-8 14" {...st(D, 9)} /><path d="M48 28l8 16M112 30l-8 14" {...st(a, 5)} />
+      <ellipse cx="80" cy="62" rx="36" ry="32" fill={a} stroke={D} strokeWidth="4" />
+      <ellipse cx="68" cy="56" rx="9" ry="12" fill="#fff" stroke={D} strokeWidth="3" /><ellipse cx="92" cy="56" rx="9" ry="12" fill="#fff" stroke={D} strokeWidth="3" />
+      <circle cx="70" cy="59" r="4" fill={D} /><circle cx="94" cy="59" r="4" fill={D} />
+      <path d="M62 76q18 16 36 0z" fill="#b8323a" stroke={D} strokeWidth="3" strokeLinejoin="round" />
+      <path d="M72 84q8 5 16 0" {...st('#ff8fa0', 3)} />
+    </>
+  ),
+  'style-pixel-art': (a, b) => (
+    <>
+      {['..hhhhhh..', '.hhhhhhhh.', '.hhsssshh.', '.hsessesh.', '.hssssssh.', '..ssmmss..', '...ssss...', '..cccccc..', '.cccccccc.', '.cc.cc.cc.'].flatMap((row, y) =>
+        [...row].map((ch, x) => {
+          if (ch === '.') return null;
+          const fill = ch === 'h' ? '#7a4a2a' : ch === 's' ? b : ch === 'e' ? D : ch === 'm' ? '#c0504a' : a;
+          return <rect key={`${x}-${y}`} x={44 + x * 7.2} y={12 + y * 8.6} width="7.3" height="8.7" fill={fill} />;
+        }),
+      )}
+      <rect x="18" y="30" width="7" height="7" fill="#ffd45a" /><rect x="25" y="23" width="7" height="7" fill="#ffd45a" /><rect x="11" y="23" width="7" height="7" fill="#ffd45a" /><rect x="18" y="16" width="7" height="7" fill="#ffd45a" />
+      <rect x="130" y="70" width="7" height="7" fill="#ff5c8a" /><rect x="144" y="70" width="7" height="7" fill="#ff5c8a" /><rect x="130" y="77" width="21" height="7" fill="#ff5c8a" /><rect x="137" y="84" width="7" height="7" fill="#ff5c8a" />
+    </>
+  ),
+  'style-digital-painting': (a, b) => (
+    <>
+      <rect width="160" height="110" fill={a} opacity=".28" />
+      <circle cx="112" cy="40" r="26" fill={b} opacity=".35" /><circle cx="112" cy="40" r="15" fill={b} />
+      <path d="M0 74l30-30 22 20 20-28 26 30 24-18 38 30v32H0z" fill={a} opacity=".55" />
+      <path d="M0 86l26-16 30 12 28-20 34 22 42-14v40H0z" fill="#1b2440" opacity=".85" />
+      <path d="M0 98l40-8 44 10 76-12v22H0z" fill={D} />
+      <path d="M96 88v-9M96 79l-3-5M96 79l3-5" {...st('#0b0e0c', 2.2)} /><circle cx="96" cy="71" r="2.4" fill="#0b0e0c" />
+      <path d="M14 22c10-4 20-4 30 0M24 30c8-3 14-3 22 0" {...st('#ffffff', 2.5)} opacity=".35" />
+    </>
+  ),
+  'style-viking': (a, b) => (
+    <>
+      <path d="M30 16l100 78M130 16L30 94" {...st('#6b4a2b', 5)} />
+      <path d="M26 12l12-2 2 16-10 4zM134 12l-12-2-2 16 10 4z" fill="#cfd6e0" stroke={D} strokeWidth="2" strokeLinejoin="round" />
+      <circle cx="80" cy="55" r="36" fill={b} stroke={a} strokeWidth="5" />
+      <path d="M80 19a36 36 0 0 1 36 36H80zM80 91a36 36 0 0 1-36-36h36z" fill={a} opacity=".55" />
+      <path d="M80 19v72M44 55h72" {...st(D, 2)} opacity=".6" />
+      <circle cx="80" cy="55" r="9" fill="#cfd6e0" stroke={D} strokeWidth="2.5" />
+      {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => <circle key={deg} cx={80 + 31 * Math.cos((deg * Math.PI) / 180)} cy={55 + 31 * Math.sin((deg * Math.PI) / 180)} r="2" fill={D} />)}
+      <path d="M62 36l6 6-6 6M98 62l-6 6 6 6M98 36v12M62 62v12l5-6" {...st(D, 2)} />
+    </>
+  ),
   'style-pfp-cinematic': (a, b) => (
     <>
       <circle cx="80" cy="52" r="40" fill={a} opacity=".25" />
