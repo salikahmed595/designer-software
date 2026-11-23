@@ -51,10 +51,12 @@ describe('thumbnails', () => {
       '/thumbnails/stream-overlay.jpg': '/assets/a.jpg',
       '/thumbnails/Style-Manga.PNG': '/assets/b.png',
       '/thumbnails/README.md': '/assets/readme',
+      '/thumbnails/style-chibi.svg': '/assets/d.svg',
       '/thumbnails/not-a-real-artwork.webp': '/assets/c.webp',
     });
     expect(photos.get('stream-overlay')).toBe('/assets/a.jpg');
     expect(photos.get('style-manga')).toBe('/assets/b.png');
+    expect(photos.get('style-chibi')).toBe('/assets/d.svg');
     expect(photos.has('readme')).toBe(false);
     expect(photos.has('not-a-real-artwork')).toBe(false);
   });

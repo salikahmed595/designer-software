@@ -2,7 +2,7 @@
 
 Put one example image per card in this folder. The app picks it up by file name and shows it in place of the drawn sketch.
 
-- **Format:** PNG, JPG or WebP. Any size works; about 800 x 550 px (landscape) looks best and loads fast.
+- **Format:** PNG, JPG, WebP or SVG. Any size works; about 800 x 550 px (landscape) looks best and loads fast.
 - **Name:** exactly as listed below, plus the extension. Example: `stream-overlay.jpg`.
 - **Missing image:** the drawn sketch stays, so you can add them a few at a time.
 - **Rights:** use your own studio work, or images you are allowed to use.

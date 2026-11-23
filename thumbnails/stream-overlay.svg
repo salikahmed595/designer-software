@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 550" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#140b33"/><stop offset=".45" stop-color="#4a1f6e"/><stop offset=".68" stop-color="#e2557a"/><stop offset=".8" stop-color="#ffb36b"/>
+    </linearGradient>
+    <radialGradient id="sun" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#fff6d6"/><stop offset=".45" stop-color="#ffd27a"/><stop offset="1" stop-color="#ff8a5c" stop-opacity="0"/></radialGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b06bff"/><stop offset="1" stop-color="#4fe3ff"/></linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b06bff"/><stop offset="1" stop-color="#ff5fa8"/></linearGradient>
+    <linearGradient id="cam" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2c2450"/><stop offset="1" stop-color="#151226"/></linearGradient>
+    <linearGradient id="skin" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd9bf"/><stop offset="1" stop-color="#e3a587"/></linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#141026" stop-opacity=".86"/><stop offset="1" stop-color="#0c0a18" stop-opacity=".92"/></linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="14"/></filter>
+    <clipPath id="camClip"><rect x="30" y="336" width="208" height="150" rx="8"/></clipPath>
+  </defs>
+
+  <!-- game scene -->
+  <rect width="800" height="550" fill="url(#sky)"/>
+  <g fill="#fff" opacity=".8"><circle cx="90" cy="70" r="1.6"/><circle cx="210" cy="40" r="1.2"/><circle cx="330" cy="95" r="1.4"/><circle cx="470" cy="55" r="1.1"/><circle cx="150" cy="130" r="1"/><circle cx="560" cy="120" r="1.3"/><circle cx="260" cy="160" r="1"/></g>
+  <circle cx="470" cy="330" r="150" fill="url(#sun)"/>
+  <circle cx="470" cy="330" r="46" fill="#fff3cf"/>
+  <g filter="url(#soft)" opacity=".5"><ellipse cx="220" cy="250" rx="150" ry="18" fill="#ff9bb0"/><ellipse cx="620" cy="215" rx="120" ry="14" fill="#ffc08f"/></g>
+  <path d="M0 360l70-70 60 40 80-90 70 70 60-40 90 80 80-60 70 50 90-90 60 60 70-40v280H0z" fill="#3b2468"/>
+  <path d="M0 410l90-60 70 40 60-50 90 60 70-30 100 60 90-70 110 60 120-50v180H0z" fill="#27174c"/>
+  <!-- castle -->
+  <g fill="#1b1038"><rect x="330" y="330" width="26" height="70"/><rect x="362" y="350" width="40" height="50"/><rect x="408" y="322" width="22" height="78"/><path d="M326 330l17-28 17 28zM404 322l15-30 15 30z"/><rect x="336" y="322" width="4" height="8"/><rect x="346" y="322" width="4" height="8"/></g>
+  <rect x="372" y="366" width="8" height="12" fill="#ffd27a"/><rect x="416" y="344" width="6" height="9" fill="#ffd27a"/>
+  <path d="M0 470l120-50 90 26 120-44 130 40 110-36 230 60v84H0z" fill="#140c2c"/>
+  <!-- hero on the ridge -->
+  <g fill="#0a0618"><circle cx="300" cy="388" r="9"/><path d="M290 398h20l6 44h-10l-4-24h-4l-4 24h-10z"/><path d="M310 402l34-22 3 4-32 26z"/><path d="M291 400c-14 10-22 26-24 44 12-10 20-22 26-36z"/></g>
+  <path d="M344 380l14-9" stroke="#bfe9ff" stroke-width="3" stroke-linecap="round" filter="url(#glow)"/>
+
+  <!-- in-game HUD -->
+  <g opacity=".95">
+    <rect x="262" y="66" width="150" height="10" rx="5" fill="#000" opacity=".45"/><rect x="262" y="66" width="112" height="10" rx="5" fill="#ff5f7a"/>
+    <rect x="262" y="82" width="110" height="7" rx="3.5" fill="#000" opacity=".45"/><rect x="262" y="82" width="74" height="7" rx="3.5" fill="#4fe3ff"/>
+    <text x="262" y="60" font-size="11" font-weight="700" fill="#fff" opacity=".9">LV 27  SHADOWBLADE</text>
+  </g>
+
+  <!-- top bar -->
+  <rect width="800" height="46" fill="url(#panel)"/>
+  <rect y="45" width="800" height="2.5" fill="url(#neon)" filter="url(#glow)"/>
+  <path d="M26 12l12 7v14l-12 7-12-7V19z" fill="url(#neon)"/><path d="M22 28l5-11 5 11h-3.200l-1.800-4-1.800 4z" fill="#0c0a18"/>
+  <text x="48" y="30" font-size="18" font-weight="800" fill="#fff" letter-spacing="1.5">NIGHTWOLF</text>
+  <text x="400" y="29" font-size="12" font-weight="600" fill="#cfc6f5" text-anchor="middle" letter-spacing="2">RANKED CLIMB  ·  EPISODE 12</text>
+  <rect x="664" y="12" width="52" height="22" rx="5" fill="#ff3b5c"/><circle cx="675" cy="23" r="3.5" fill="#fff"/><text x="683" y="28" font-size="12" font-weight="800" fill="#fff">LIVE</text>
+  <path d="M728 23c4-6 14-6 18 0-4 6-14 6-18 0z" fill="none" stroke="#fff" stroke-width="1.6"/><circle cx="737" cy="23" r="2.4" fill="#fff"/>
+  <text x="752" y="28" font-size="13" font-weight="700" fill="#fff">1.2K</text>
+
+  <!-- webcam frame -->
+  <rect x="24" y="330" width="220" height="162" rx="12" fill="url(#neon)" filter="url(#glow)"/>
+  <rect x="30" y="336" width="208" height="150" rx="8" fill="url(#cam)"/>
+  <g clip-path="url(#camClip)">
+    <circle cx="190" cy="360" r="46" fill="#b06bff" opacity=".28" filter="url(#soft)"/>
+    <rect x="42" y="352" width="34" height="50" rx="3" fill="#1f1a3a"/><rect x="46" y="356" width="26" height="6" fill="#4fe3ff" opacity=".7"/><rect x="46" y="366" width="26" height="6" fill="#ff5fa8" opacity=".7"/>
+    <path d="M70 486c4-42 30-58 64-58s60 16 64 58z" fill="#2a2f5c"/><path d="M118 430l16 22 16-22" fill="none" stroke="#1b1f42" stroke-width="5"/>
+    <rect x="124" y="402" width="20" height="30" rx="6" fill="#e3a587"/>
+    <ellipse cx="134" cy="388" rx="30" ry="35" fill="url(#skin)"/>
+    <path d="M104 384c-4-32 12-48 30-48s34 16 30 48c-6-16-14-22-30-22s-24 6-30 22z" fill="#3a2a55"/>
+    <ellipse cx="124" cy="390" rx="3.200" ry="4" fill="#2a1d33"/><ellipse cx="145" cy="390" rx="3.200" ry="4" fill="#2a1d33"/>
+    <path d="M126 406q8 6 17 0" fill="none" stroke="#a0564e" stroke-width="2.200" stroke-linecap="round"/>
+    <path d="M102 386c0-44 64-44 64 0" fill="none" stroke="#11101c" stroke-width="7"/>
+    <rect x="96" y="378" width="12" height="24" rx="6" fill="#11101c"/><rect x="160" y="378" width="12" height="24" rx="6" fill="#11101c"/>
+    <rect x="98" y="384" width="3" height="12" rx="1.5" fill="#4fe3ff"/>
+    <path d="M102 400c2 14 12 18 24 16" fill="none" stroke="#11101c" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <path d="M24 356v-14a12 12 0 0 1 12-12h22M244 466v14a12 12 0 0 1-12 12h-22" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity=".9"/>
+  <rect x="44" y="480" width="124" height="26" rx="6" fill="#0c0a18"/><rect x="44" y="480" width="5" height="26" rx="2" fill="url(#neon)"/>
+  <text x="58" y="498" font-size="13" font-weight="800" fill="#fff" letter-spacing="1">NIGHTWOLF</text>
+
+  <!-- chat column -->
+  <rect x="592" y="66" width="188" height="384" rx="12" fill="url(#panel)" stroke="#b06bff" stroke-opacity=".55" stroke-width="1.5"/>
+  <text x="608" y="92" font-size="12" font-weight="800" fill="#fff" letter-spacing="2">STREAM CHAT</text>
+  <rect x="608" y="100" width="156" height="1.5" fill="#ffffff" opacity=".15"/>
+  <g font-size="12">
+    <text x="608" y="126"><tspan font-weight="700" fill="#ff8ad0">PixelKat</tspan><tspan fill="#e8e4ff">  that clutch!!</tspan></text>
+    <text x="608" y="154"><tspan font-weight="700" fill="#4fe3ff">ghost_ren</tspan><tspan fill="#e8e4ff">  GG WP</tspan></text>
+    <text x="608" y="182"><tspan font-weight="700" fill="#9cfb59">mossy</tspan><tspan fill="#e8e4ff">  first time here, hi</tspan></text>
+    <text x="608" y="210"><tspan font-weight="700" fill="#ffd27a">Aiko</tspan><tspan fill="#e8e4ff">  go left go left</tspan></text>
+    <text x="608" y="238"><tspan font-weight="700" fill="#b06bff">vex</tspan><tspan fill="#e8e4ff">  new overlay looks sick</tspan></text>
+    <text x="608" y="266"><tspan font-weight="700" fill="#ff8ad0">PixelKat</tspan><tspan fill="#e8e4ff">  HYPE</tspan></text>
+    <text x="608" y="294"><tspan font-weight="700" fill="#4fe3ff">juno77</tspan><tspan fill="#e8e4ff">  what rank now?</tspan></text>
+    <text x="608" y="322"><tspan font-weight="700" fill="#ffd27a">Aiko</tspan><tspan fill="#e8e4ff">  diamond 2 i think</tspan></text>
+    <text x="608" y="350"><tspan font-weight="700" fill="#9cfb59">mossy</tspan><tspan fill="#e8e4ff">  followed :)</tspan></text>
+  </g>
+  <rect x="604" y="366" width="164" height="32" rx="8" fill="#b06bff" opacity=".22"/><rect x="604" y="366" width="4" height="32" rx="2" fill="#b06bff"/>
+  <text x="616" y="387" font-size="12" font-weight="700" fill="#fff">vex subscribed · 6 months</text>
+  <rect x="604" y="410" width="164" height="28" rx="14" fill="#000" opacity=".4"/><text x="618" y="429" font-size="12" fill="#9d97c2">Send a message</text>
+
+  <!-- bottom info bar -->
+  <rect x="262" y="470" width="312" height="50" rx="12" fill="url(#panel)" stroke="#4fe3ff" stroke-opacity=".5" stroke-width="1.5"/>
+  <text x="278" y="490" font-size="10" font-weight="700" fill="#9d97c2" letter-spacing="1.5">LATEST FOLLOWER</text>
+  <text x="278" y="509" font-size="15" font-weight="800" fill="#fff">PixelKat</text>
+  <rect x="402" y="482" width="1.5" height="26" fill="#fff" opacity=".18"/>
+  <text x="416" y="490" font-size="10" font-weight="700" fill="#9d97c2" letter-spacing="1.5">SUB GOAL</text><text x="558" y="490" font-size="10" font-weight="700" fill="#fff" text-anchor="end">73 / 100</text>
+  <rect x="416" y="498" width="142" height="10" rx="5" fill="#000" opacity=".5"/><rect x="416" y="498" width="104" height="10" rx="5" fill="url(#bar)" filter="url(#glow)"/>
+  <path d="M776 530h-30M776 530v-30" fill="none" stroke="url(#neon)" stroke-width="3" stroke-linecap="round"/>
+</svg>

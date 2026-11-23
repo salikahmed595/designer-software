@@ -597,7 +597,7 @@ export const hasArt = (id: string): boolean => id in ART;
 export function indexThumbnails(files: Record<string, string>): Map<string, string> {
   const photos = new Map<string, string>();
   for (const [path, url] of Object.entries(files)) {
-    const match = /([^/\\]+)\.(png|jpe?g|webp)$/i.exec(path);
+    const match = /([^/\\]+)\.(png|jpe?g|webp|svg)$/i.exec(path);
     const id = match?.[1].toLowerCase();
     if (id && hasArt(id)) photos.set(id, url);
   }
@@ -605,7 +605,7 @@ export function indexThumbnails(files: Record<string, string>): Map<string, stri
 }
 
 const PHOTOS = indexThumbnails(
-  import.meta.glob('/thumbnails/*.{png,jpg,jpeg,webp,PNG,JPG,JPEG,WEBP}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+  import.meta.glob('/thumbnails/*.{png,jpg,jpeg,webp,svg,PNG,JPG,JPEG,WEBP,SVG}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
 );
 
 interface ThumbProps {
