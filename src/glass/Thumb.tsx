@@ -441,12 +441,13 @@ const ART: Record<string, Draw> = {
     </>
   ),
 
-  /* ---------- Category cover for the not-yet-available Animation category ---------- */
-  'animation-cover': (a, b) => (
+  /* ---------- Cover for the not-yet-available 3D category ---------- */
+  '3d-cover': (a, b) => (
     <>
-      <circle cx="80" cy="55" r="30" {...st(a, 5)} strokeDasharray="120 70" />
-      <circle cx="80" cy="55" r="30" {...st(b, 5)} strokeDasharray="40 150" strokeDashoffset="-130" />
-      <path d="M80 41l3.5 10.5L94 55l-10.5 3.5L80 69l-3.5-10.5L66 55l10.5-3.5z" fill="#fff" />
+      <path d="M80 20l32 17v36L80 90 48 73V37z" fill={a} opacity=".22" />
+      <path d="M80 20l32 17v36L80 90 48 73V37z" {...st(a, 3)} />
+      <path d="M48 37l32 17 32-17M80 54v36" {...st(b, 3)} />
+      <path d="M124 22l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#fff" />
     </>
   ),
 };

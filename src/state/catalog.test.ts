@@ -1,38 +1,36 @@
 import { describe, it, expect } from 'vitest';
-import {
-  CATEGORIES, TEMPLATES, HOME_POPULAR, PALETTES, getTemplate, templatesIn, searchTemplates, suggestFromPrompt,
-} from './catalog';
+import { CATEGORIES, TEMPLATES, HOME_POPULAR, getTemplate, templatesIn, searchTemplates } from './catalog';
 
-describe('artwork catalog', () => {
-  it('has exactly six categories; only Animation is unavailable (2D only for now)', () => {
+describe('artwork catalog (streamer and gamer artwork only)', () => {
+  it('has five 2D categories plus 3D, which is not available yet', () => {
     expect(CATEGORIES.map((c) => c.name)).toEqual([
-      'Streaming', 'Discord', 'Characters & VTubers', 'Emotes & Badges', 'Gaming Branding', 'Animation',
+      'Streaming', 'Discord', 'Characters & VTubers', 'Emotes & Badges', 'Gaming Branding', '3D Artwork',
     ]);
-    expect(CATEGORIES.filter((c) => !c.available).map((c) => c.id)).toEqual(['animation']);
+    expect(CATEGORIES.filter((c) => !c.available).map((c) => c.id)).toEqual(['3d']);
+    expect(CATEGORIES.find((c) => c.id === '3d')?.unavailableNote).toMatch(/coming soon/i);
   });
 
-  it('every available category has 8 templates with unique canonical ids and valid data', () => {
+  it('every available category has 8 artwork types with unique ids', () => {
     const ids = TEMPLATES.map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const c of CATEGORIES.filter((x) => x.available)) expect(templatesIn(c.id)).toHaveLength(8);
-    expect(templatesIn('animation')).toHaveLength(0);
+    expect(templatesIn('3d')).toHaveLength(0);
     for (const t of TEMPLATES) {
-      expect(t.styles.length).toBeGreaterThanOrEqual(2);
       expect(t.title.length).toBeGreaterThan(2);
       expect(t.subtitle.length).toBeGreaterThan(5);
     }
   });
 
-  it('lists popular templates first inside a category', () => {
+  it('lists popular types first and has a popular shortlist for the first screen', () => {
     const flags = templatesIn('streaming').map((t) => t.popular);
     expect(flags).toEqual([...flags].sort((a, b) => Number(b) - Number(a)));
+    expect(HOME_POPULAR.length).toBeGreaterThanOrEqual(8);
     expect(HOME_POPULAR.every((id) => getTemplate(id))).toBe(true);
-    expect(PALETTES).toHaveLength(5);
   });
 });
 
 describe('search with synonyms', () => {
-  it('matches common synonyms', () => {
+  it('matches the words designers and clients actually use', () => {
     expect(searchTemplates('pfp')[0].id).toBe('profile-art');
     expect(searchTemplates('BRB')[0].id).toBe('brb-screen');
     expect(searchTemplates('reactive avatar')[0].id).toBe('pngtuber');
@@ -49,44 +47,5 @@ describe('search with synonyms', () => {
   it('returns nothing for gibberish and for an empty query', () => {
     expect(searchTemplates('zzzzqq')).toEqual([]);
     expect(searchTemplates('   ')).toEqual([]);
-  });
-});
-
-describe('intent suggestions from a prompt', () => {
-  it('confident match picks one template and infers the colour', () => {
-    const s = suggestFromPrompt('Purple Twitch webcam border');
-    expect(s.confident).toBe(true);
-    expect(s.templates.map((t) => t.id)).toEqual(['webcam-frame']);
-    expect(s.paletteId).toBe('violet');
-  });
-
-  it('ambiguous prompt returns up to three choices and never auto-picks', () => {
-    const s = suggestFromPrompt('I need something red and black with a dragon for my Discord');
-    expect(s.confident).toBe(false);
-    expect(s.templates).toHaveLength(3);
-    expect(s.templates.map((t) => t.id)).toEqual(expect.arrayContaining(['server-icon', 'server-banner', 'mascot']));
-    expect(s.paletteId).toBe('ember');
-  });
-
-  it('"make my avatar talk" suggests PNGTuber, with an honest capability note', () => {
-    const s = suggestFromPrompt('Make my avatar talk');
-    expect(s.templates[0].id).toBe('pngtuber');
-    expect(s.templates[0].note).toMatch(/not a rigged/i);
-  });
-
-  it('"full stream branding" suggests the bundle with a deliverables checklist', () => {
-    const s = suggestFromPrompt('Full stream branding');
-    expect(s.templates[0].id).toBe('full-stream-kit');
-    expect(s.templates[0].bundle?.length).toBeGreaterThan(3);
-  });
-
-  it('vague prompts stay ambiguous; unmatched prompts fall back to popular ideas', () => {
-    const vague = suggestFromPrompt('gaming art');
-    expect(vague.confident).toBe(false);
-    expect(vague.matched).toBe(true);
-    const none = suggestFromPrompt('zzzzqq');
-    expect(none.matched).toBe(false);
-    expect(none.confident).toBe(false);
-    expect(none.templates).toHaveLength(3);
   });
 });

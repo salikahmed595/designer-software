@@ -1,27 +1,32 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CATEGORIES, getTemplate, templatesIn } from '../state/catalog';
-import { RATIOS, REF_ROLES } from '../state/flow';
-import {
-  ART_STYLE_TABS, MAX_BRIEF, filterArtStyles, getArtStyle, productionIssues, ratioLabel, skillFor,
-  type BridgeHealth, type JobView,
-} from '../state/production';
-import { IconClose, IconPlus, IconSearch } from '../components/icons';
-import { Breadcrumb, ChoiceCheck, rise } from './ui';
+import { useCallback, useEffect, useState } from 'react';
+import { getTemplate } from '../state/catalog';
+import { MAX_BRIEF_CHARS, MAX_TEXT, RATIOS, REF_ROLES } from '../state/flow';
+import { ART_STYLES, getArtStyle, productionIssues, ratioLabel, skillFor, type BridgeHealth, type JobView } from '../state/production';
+import { IconCheck, IconClose, IconPlus } from '../components/icons';
+import { ChoiceCheck, GuidedStepper, rise } from './ui';
 import { Thumb } from './Thumb';
 import type { PageProps } from './pages';
 
-const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'The production bridge is offline. Start the studio app with “npm run dev” on the computer that has Photoshop and Illustrator.' };
+const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'Production is offline. Start the studio app with “npm run dev” on the computer that has Photoshop and Illustrator.' };
 const STATUS_LABEL: Record<JobView['status'], string> = { queued: 'Waiting', running: 'Drawing…', done: 'Finished', failed: 'Needs attention' };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/production/${path}`, init);
   const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
-  if (!res.ok || body === null) throw new Error(body?.error ?? 'The production bridge did not answer.');
+  if (!res.ok || body === null) throw new Error(body?.error ?? 'Production did not answer.');
   return body;
 }
 
-/** Talks to the local bridge: health once, jobs on a slow poll while any job is active. */
-function useProductionBridge() {
+export interface Bridge {
+  health: BridgeHealth | null;
+  jobs: JobView[];
+  activeJobs: number;
+  refresh: () => Promise<void>;
+  send: (job: unknown) => Promise<void>;
+}
+
+/** Talks to the local production bridge: health once, jobs on a slow poll while any job is active. */
+export function useProductionBridge(): Bridge {
   const [health, setHealth] = useState<BridgeHealth | null>(null);
   const [jobs, setJobs] = useState<JobView[]>([]);
 
@@ -29,7 +34,7 @@ function useProductionBridge() {
     try {
       setJobs((await api<{ jobs: JobView[] }>('jobs')).jobs);
     } catch {
-      /* keep the last known list; health shows the bridge state */
+      /* keep the last known list; health shows whether production is reachable */
     }
   }, []);
 
@@ -42,54 +47,67 @@ function useProductionBridge() {
     };
   }, [refresh]);
 
-  const active = jobs.some((j) => j.status === 'queued' || j.status === 'running');
+  const activeJobs = jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
   useEffect(() => {
-    if (!active) return;
+    if (activeJobs === 0) return;
     const t = setInterval(() => void refresh(), 2500);
     return () => clearInterval(t);
-  }, [active, refresh]);
+  }, [activeJobs, refresh]);
 
-  return { health, jobs, refresh };
+  const send = useCallback(async (job: unknown) => {
+    await api('jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(job) });
+    await refresh();
+  }, [refresh]);
+
+  return { health, jobs, activeJobs, refresh, send };
 }
 
-/** Sub-page: choose the art style, give the client brief + reference + ratio, and send it to the agent. */
-export function ProducePage({ state, dispatch, onAddReference }: PageProps) {
+/** Shown only when something needs attention; a healthy connection gets a quiet one-line confirmation. */
+function BridgeNote({ health }: { health: BridgeHealth | null }) {
+  if (health === null) return <p className="bridge-note is-quiet" role="status"><span className="dot" aria-hidden />Checking production…</p>;
+  const ok = health.online && health.runner === 'claude';
+  return <p className={`bridge-note ${ok ? 'is-ok' : ''}`} role="status"><span className="dot" aria-hidden />{health.detail}</p>;
+}
+
+/** Step 2 — everything the agent needs, on one screen. */
+export function BriefPage({ state, dispatch, onAddReference, bridge }: PageProps & { bridge: Bridge }) {
   const { brief } = state;
-  const { health, jobs, refresh } = useProductionBridge();
-  const [tab, setTab] = useState('All');
-  const [query, setQuery] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tried, setTried] = useState(false);
-
-  const styles = useMemo(() => filterArtStyles(query, tab), [query, tab]);
-  const style = getArtStyle(brief.artStyleId);
   const template = getTemplate(brief.templateId);
-  const issues = productionIssues({ artStyleId: brief.artStyleId, brief: brief.prompt, hasReference: Boolean(brief.referenceName), referenceRole: brief.referenceRole });
-  const canRun = health?.online === true && health.runner !== 'off';
-  const roleMissing = tried && Boolean(brief.referenceName) && !brief.referenceRole;
+  const style = getArtStyle(brief.artStyleId);
+  const tried = state.showErrors;
+  const issues = productionIssues({ templateId: brief.templateId, artStyleId: brief.artStyleId, brief: brief.prompt, hasReference: Boolean(brief.referenceName), referenceRole: brief.referenceRole });
+  const online = bridge.health?.online === true;
+  const canRun = online && bridge.health?.runner !== 'off';
+  const briefDone = brief.prompt.trim() !== '';
+  const referenceDone = !brief.referenceName || Boolean(brief.referenceRole);
+
+  if (!template) {
+    return (
+      <section className="stage">
+        <div className="glass empty-box">
+          <p className="text-[17px] font-bold">Choose an artwork first.</p>
+          <button type="button" className="btn btn-primary mt-4" onClick={() => dispatch({ type: 'goHome' })}>Choose artwork</button>
+        </div>
+      </section>
+    );
+  }
 
   const submit = async () => {
-    setTried(true);
     setError(null);
-    if (issues.length > 0 || !style || !health?.online) return;
+    if (issues.length > 0 || !style) return dispatch({ type: 'showErrors' });
     setSending(true);
     try {
-      await api('jobs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          styleId: style.id,
-          ratio: brief.ratio,
-          brief: brief.prompt,
-          templateId: brief.templateId,
-          text: brief.displayName,
-          reference: brief.referenceName && state.referencePreview && brief.referenceRole ? { dataUrl: state.referencePreview, role: brief.referenceRole } : null,
-        }),
+      await bridge.send({
+        styleId: style.id,
+        ratio: brief.ratio,
+        brief: brief.prompt,
+        templateId: brief.templateId,
+        text: brief.displayName,
+        reference: brief.referenceName && state.referencePreview && brief.referenceRole ? { dataUrl: state.referencePreview, role: brief.referenceRole } : null,
       });
-      setTried(false);
-      await refresh();
-      document.getElementById('jobs-title')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+      dispatch({ type: 'jobSent' });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The job could not be sent.');
     } finally {
@@ -97,108 +115,92 @@ export function ProducePage({ state, dispatch, onAddReference }: PageProps) {
     }
   };
 
+  const checklist: [string, boolean, string][] = [
+    ['Artwork', true, template.title],
+    ['Art style', Boolean(style), style?.name ?? 'Not chosen yet'],
+    ['Client brief', briefDone, briefDone ? 'Written' : 'Not written yet'],
+    ['Reference', referenceDone, brief.referenceName ? (brief.referenceRole ?? 'Say how to use it') : 'None (optional)'],
+    ['Size', true, ratioLabel(brief.ratio)],
+  ];
+
   return (
     <section className="stage">
-      <Breadcrumb items={[{ label: 'Home', onClick: () => dispatch({ type: 'goHome' }) }, { label: 'Production' }]} />
+      <GuidedStepper step={2} onJump={() => dispatch({ type: 'goHome' })} />
       <div className="stage-head">
         <div>
-          <p className="tiny">Production · Photoshop + Illustrator</p>
-          <h1 id="page-title" tabIndex={-1}>Send to production</h1>
-          <p className="stage-sub">Pick the art style, paste the client’s brief, add their reference and choose the ratio. The agent does the drawing.</p>
+          <h1 id="page-title" tabIndex={-1}>Brief for {template.title}</h1>
+          <p className="stage-sub">Four quick things, then the agent draws it in Photoshop and Illustrator.</p>
         </div>
+        <button type="button" className="btn" onClick={() => dispatch({ type: 'back' })}><span aria-hidden>← </span>Change artwork</button>
       </div>
 
-      <p className={`bridge-note ${health?.online && health.runner === 'claude' ? 'is-ok' : ''}`} role="status">
-        <span className="dot" aria-hidden />
-        {health === null ? 'Checking the production bridge…' : health.detail}
-      </p>
-
       <form
-        className="produce-grid"
+        className="brief-grid"
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
       >
-        <div className="glass panel">
-          <fieldset className="form-row">
-            <legend className="form-label">1 · Art style <span className="required">Required</span></legend>
-            <div className="mb-3 flex flex-wrap items-center gap-3">
-              <div role="tablist" aria-label="Art style categories" className="flex flex-wrap gap-1">
-                {ART_STYLE_TABS.map((t) => (
-                  <button key={t} type="button" role="tab" aria-selected={t === tab} className={`tab-pill ${t === tab ? 'is-on' : ''}`} onClick={() => setTab(t)}>{t}</button>
-                ))}
-              </div>
-              <label className="search-field !mb-0 ml-auto !max-w-[220px]">
-                <span className="sr-only">Search art styles</span>
-                <IconSearch width={15} height={15} className="shrink-0 text-[var(--text-muted)]" />
-                <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search styles" />
-              </label>
+        <div className="brief-steps">
+          <div className="glass panel" role="group" aria-labelledby="title-style">
+            <p id="title-style" className="step-title"><span className={`step-num ${style ? 'is-done' : ''}`} aria-hidden>{style ? <IconCheck width={14} height={14} strokeWidth={3.5} /> : 1}</span> Pick the art style</p>
+            <p className="help">How should it look? Each style is drawn with its own method.</p>
+            <div role="radiogroup" aria-label="Art style" className="art-style-grid">
+              {ART_STYLES.map((s, i) => {
+                const on = brief.artStyleId === s.id;
+                return (
+                  <button key={s.id} type="button" role="radio" aria-checked={on} className={`style-card rise ${on ? 'is-on' : ''}`} style={rise(i)} onClick={() => dispatch({ type: 'setArtStyle', artStyleId: s.id })}>
+                    <Thumb id={`style-${s.id}`} a={s.colors[0]} b={s.colors[1]} className="rounded-[12px]" />
+                    <span className="mt-2 block text-[15px] font-bold">{s.name}</span>
+                    <span className="block text-[13px] leading-snug text-[var(--text-secondary)]">{s.description}</span>
+                    {on && <ChoiceCheck />}
+                  </button>
+                );
+              })}
             </div>
-            {styles.length === 0 ? (
-              <p className="empty-note">No art style matches “{query.trim()}”.</p>
-            ) : (
-              <div role="radiogroup" aria-label="Art style" className="art-style-grid">
-                {styles.map((s, i) => {
-                  const on = brief.artStyleId === s.id;
-                  return (
-                    <button key={s.id} type="button" role="radio" aria-checked={on} className={`style-card rise ${on ? 'is-on' : ''}`} style={rise(i)} onClick={() => dispatch({ type: 'setArtStyle', artStyleId: s.id })}>
-                      <Thumb id={`style-${s.id}`} a={s.colors[0]} b={s.colors[1]} className="rounded-[12px]" />
-                      <span className="mt-2 block text-[14px] font-bold">{s.name}</span>
-                      <span className="block text-[12px] leading-snug text-[var(--text-secondary)]">{s.description}</span>
-                      {on && <ChoiceCheck />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
             {tried && !style && <p role="alert" className="field-error">Choose an art style.</p>}
-            {style && (
-              <p className="skill-line">
-                Skill used: <code>{skillFor(style.id)}</code>
-                {style.skill === null && <span> — the general skill, until you add one for {style.name} in <code>production/styles.json</code>.</span>}
-              </p>
-            )}
-          </fieldset>
+          </div>
 
-          <div className="form-row">
-            <label htmlFor="client-brief" className="form-label">2 · Client brief <span className="required">Required</span></label>
+          <div className="glass panel">
+            <label htmlFor="client-brief" className="step-title"><span className={`step-num ${briefDone ? 'is-done' : ''}`} aria-hidden>{briefDone ? <IconCheck width={14} height={14} strokeWidth={3.5} /> : 2}</span> Paste the client’s brief</label>
+            <p className="help" id="brief-help">Subject, mood, colours, must-haves and anything to avoid. The client’s own words are fine.</p>
             <textarea
               id="client-brief"
               className="field"
-              rows={5}
-              maxLength={MAX_BRIEF}
+              rows={6}
+              maxLength={MAX_BRIEF_CHARS}
               value={brief.prompt}
               onChange={(e) => dispatch({ type: 'setPrompt', prompt: e.target.value })}
-              placeholder="Paste what the client asked for: subject, mood, colours, must-haves, things to avoid…"
-              aria-invalid={(tried && brief.prompt.trim() === '') || undefined}
-              aria-describedby={tried && brief.prompt.trim() === '' ? 'brief-error' : undefined}
+              placeholder={`e.g. ${template.promptHint}`}
+              aria-invalid={(tried && !briefDone) || undefined}
+              aria-describedby={tried && !briefDone ? 'brief-error' : 'brief-help'}
             />
-            {tried && brief.prompt.trim() === '' && <p id="brief-error" role="alert" className="field-error">Write the client brief.</p>}
+            {tried && !briefDone && <p id="brief-error" role="alert" className="field-error">Write the client brief.</p>}
+            <label htmlFor="display-name" className="sub-label">{template.nameLabel} <span className="optional">(optional)</span></label>
+            <input id="display-name" className="field" maxLength={MAX_TEXT} value={brief.displayName} onChange={(e) => dispatch({ type: 'setDisplayName', name: e.target.value })} placeholder="e.g. NightWolf" />
           </div>
 
-          <div className="form-row">
-            <p className="form-label">3 · Reference image <span className="optional">(optional)</span></p>
+          <div className="glass panel">
+            <p className="step-title"><span className={`step-num ${brief.referenceName && referenceDone ? 'is-done' : ''}`} aria-hidden>{brief.referenceName && referenceDone ? <IconCheck width={14} height={14} strokeWidth={3.5} /> : 3}</span> Add a reference image <span className="optional">(optional)</span></p>
+            <p className="help">A photo of the client’s character, a style they like, or a design to edit.</p>
             {!brief.referenceName ? (
               <button type="button" className="reference-box" onClick={onAddReference}>
-                <span className="reference-thumb" aria-hidden><IconPlus /></span>
+                <span className="reference-thumb" aria-hidden><IconPlus width={20} height={20} /></span>
                 <span>
-                  <strong className="block text-[14px]">Add the client’s reference</strong>
+                  <strong className="block text-[15px]">Choose an image</strong>
                   <span className="text-[13px] text-[var(--text-secondary)]">PNG, JPG or WebP, up to 10 MB</span>
                 </span>
               </button>
             ) : (
-              <div className="reference-box is-filled">
-                <span className="reference-thumb">{state.referencePreview ? <img src={state.referencePreview} alt="Client reference" /> : <IconPlus />}</span>
-                <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{brief.referenceName}</span>
-                <button type="button" className="btn btn-sm" onClick={() => dispatch({ type: 'clearReference' })}><IconClose width={12} height={12} /> Remove</button>
-              </div>
-            )}
-            {brief.referenceName && (
-              <fieldset className="mt-3">
-                <legend className="form-sub" id="produce-role-label">How should the agent use it? <span className="required">Required</span></legend>
-                <div role="radiogroup" aria-labelledby="produce-role-label" className="flex flex-wrap gap-2">
+              <>
+                <div className="reference-box is-filled">
+                  <span className="reference-thumb">{state.referencePreview ? <img src={state.referencePreview} alt="Client reference" /> : <IconPlus />}</span>
+                  <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">{brief.referenceName}</span>
+                  <button type="button" className="btn btn-sm" onClick={() => dispatch({ type: 'clearReference' })}><IconClose width={14} height={14} /> Remove</button>
+                </div>
+                <p className="sub-label" id="role-label">How should the agent use it? <span className="required">Required</span></p>
+                <div role="radiogroup" aria-labelledby="role-label" className="pill-row">
                   {REF_ROLES.map((r) => {
                     const on = brief.referenceRole === r;
                     return (
@@ -208,14 +210,15 @@ export function ProducePage({ state, dispatch, onAddReference }: PageProps) {
                     );
                   })}
                 </div>
-                {roleMissing && <p role="alert" className="field-error">Say how the reference image should be used.</p>}
-              </fieldset>
+                {tried && !referenceDone && <p role="alert" className="field-error">Say how the reference image should be used.</p>}
+              </>
             )}
           </div>
 
-          <fieldset className="form-row">
-            <legend className="form-label">4 · Ratio</legend>
-            <div role="radiogroup" aria-label="Ratio" className="flex flex-wrap gap-2">
+          <div className="glass panel" role="group" aria-labelledby="title-size">
+            <p id="title-size" className="step-title"><span className="step-num is-done" aria-hidden><IconCheck width={14} height={14} strokeWidth={3.5} /></span> Choose the size</p>
+            <p className="help">Not sure? Leave it on Auto and the right size for a {template.title.toLowerCase()} is used.</p>
+            <div role="radiogroup" aria-label="Size" className="pill-row">
               {RATIOS.map((r) => {
                 const on = brief.ratio === r;
                 return (
@@ -225,73 +228,87 @@ export function ProducePage({ state, dispatch, onAddReference }: PageProps) {
                 );
               })}
             </div>
-          </fieldset>
-
-          <details className="advanced">
-            <summary>More options</summary>
-            <div className="advanced-inner">
-              <label className="block">
-                <span className="form-label">Artwork type</span>
-                <select className="field" value={brief.templateId ?? ''} onChange={(e) => dispatch({ type: 'setArtworkType', templateId: e.target.value || null })}>
-                  <option value="">Not set — follow the brief</option>
-                  {CATEGORIES.filter((c) => c.available).map((c) => (
-                    <optgroup key={c.id} label={c.name}>
-                      {templatesIn(c.id).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
-                    </optgroup>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
-                <span className="form-label">Name or text on the artwork</span>
-                <input className="field" maxLength={60} value={brief.displayName} onChange={(e) => dispatch({ type: 'setDisplayName', name: e.target.value })} placeholder="e.g. NightWolf" />
-              </label>
-            </div>
-          </details>
-
-          <div className="action-bar">
-            <p className="summary" aria-label="Job summary">
-              {[style?.name ?? 'No style yet', template?.title, ratioLabel(brief.ratio)].filter(Boolean).join(' · ')}
-            </p>
-            <div className="flex items-center justify-between gap-3">
-              <button type="button" className="btn btn-ghost" onClick={() => dispatch({ type: 'back' })}><span aria-hidden>← </span>Back</button>
-              <button type="submit" className="btn btn-primary" disabled={sending || health?.online !== true}>
-                {sending ? 'Sending…' : 'Send to production'} <span aria-hidden>↗</span>
-              </button>
-            </div>
-            <p className="next-hint">
-              {error ? <span role="alert" className="field-error">{error}</span>
-                : tried && issues.length > 0 ? <span className="field-error">{issues[0]}</span>
-                : canRun ? 'Next: the agent opens Photoshop / Illustrator on this computer and draws it. One job runs at a time.'
-                : 'The job will be saved, but it cannot start until the agent is available.'}
-            </p>
           </div>
         </div>
 
-        <aside className="glass panel" aria-labelledby="jobs-title">
-          <div className="flex items-center justify-between gap-3">
-            <h2 id="jobs-title">Production jobs</h2>
-            <button type="button" className="btn btn-sm" onClick={() => void refresh()}>Refresh</button>
-          </div>
-          {jobs.length === 0 ? (
-            <p className="mt-4 text-[14px] text-[var(--text-secondary)]">No jobs yet. Sent jobs appear here with their status and the finished preview.</p>
-          ) : (
-            <ul aria-label="Production jobs" className="job-list">
-              {jobs.map((j) => (
-                <li key={j.id} className="job-card" data-status={j.status}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <strong className="text-[14px]">{j.styleName}{j.templateTitle ? ` · ${j.templateTitle}` : ''}</strong>
-                    <span className={`status-pill is-${j.status}`}>{STATUS_LABEL[j.status]}</span>
-                  </div>
-                  <p className="mt-1 text-[13px] text-[var(--text-secondary)]">“{j.briefExcerpt}”</p>
-                  <p className="mt-1 text-[12px] text-[var(--text-muted)]">Skill <code>{j.skill}</code> · {j.ratio} · job {j.id}</p>
-                  {j.hasPreview && j.runner !== 'mock' && <img className="job-preview" src={`/api/production/jobs/${j.id}/preview`} alt={`Finished artwork preview: ${j.styleName}`} loading="lazy" />}
-                  {j.message && <p className={`mt-2 text-[13px] ${j.status === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--text-secondary)]'}`}>{j.message}</p>}
-                </li>
-              ))}
-            </ul>
+        <aside className="glass panel summary-panel" aria-label="Your job">
+          <Thumb id={template.id} className="rounded-[14px]" />
+          <ul className="checklist" aria-label="Checklist">
+            {checklist.map(([label, done, value]) => (
+              <li key={label} className={done ? 'is-done' : ''}>
+                <span className="check-dot" aria-hidden>{done && <IconCheck width={12} height={12} strokeWidth={3.5} />}</span>
+                <span className="check-label">{label}</span>
+                <span className="check-value">{value}</span>
+              </li>
+            ))}
+          </ul>
+          {template.note && <p className="what-you-get"><strong>What you get:</strong> {template.note}</p>}
+          {template.bundle && (
+            <div className="what-you-get">
+              <strong>This kit includes:</strong>
+              <ul className="bundle-list">{template.bundle.map((b) => <li key={b}>{b}</li>)}</ul>
+            </div>
           )}
+          <button type="submit" className="btn btn-primary btn-big" disabled={sending || !online}>
+            {sending ? 'Sending…' : 'Send to production'} <span aria-hidden>→</span>
+          </button>
+          <p className="next-hint">
+            {error ? <span role="alert" className="field-error">{error}</span>
+              : tried && issues.length > 0 ? <span className="field-error">{issues.length === 1 ? issues[0] : `${issues.length} things still needed — see the red notes.`}</span>
+              : !online ? 'Production is offline, so nothing can be sent yet.'
+              : canRun ? 'One job is drawn at a time. You can start the next brief straight away.'
+              : 'The job will be saved, but it can’t start until the agent is available.'}
+          </p>
+          {style && <p className="skill-line">Drawn with the <code>{skillFor(style.id)}</code> skill.</p>}
+          {bridge.health !== null && !(online && bridge.health.runner === 'claude') && <BridgeNote health={bridge.health} />}
         </aside>
       </form>
+    </section>
+  );
+}
+
+/** Step 3 — what is being drawn, and the finished artwork. */
+export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
+  const { jobs, health, refresh } = bridge;
+  return (
+    <section className="stage">
+      <div className="stage-head">
+        <div>
+          <h1 id="page-title" tabIndex={-1}>Jobs</h1>
+          <p className="stage-sub">Everything sent to production. Finished artwork appears here.</p>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" className="btn" onClick={() => void refresh()}>Refresh</button>
+          <button type="button" className="btn btn-primary" onClick={() => dispatch({ type: 'goHome' })}><IconPlus width={16} height={16} /> New artwork</button>
+        </div>
+      </div>
+      <BridgeNote health={health} />
+      {jobs.length === 0 ? (
+        <div className="glass empty-box">
+          <p className="text-[17px] font-bold">No jobs yet</p>
+          <p>Choose an artwork, fill in the brief and send it. It will show up here.</p>
+        </div>
+      ) : (
+        <ul aria-label="Jobs" className="job-list">
+          {jobs.map((j, i) => (
+            <li key={j.id} className="glass job-card rise" style={rise(i)} data-status={j.status}>
+              <div className="job-main">
+                <div className="flex flex-wrap items-center gap-3">
+                  <strong className="text-[17px]">{j.templateTitle ?? 'Artwork'}</strong>
+                  <span className={`status-pill is-${j.status}`}>{STATUS_LABEL[j.status]}</span>
+                </div>
+                <p className="mt-1 text-[14px] text-[var(--text-secondary)]">{j.styleName} · {j.ratio}</p>
+                <p className="job-brief">“{j.briefExcerpt}”</p>
+                {j.message && <p className={`job-message ${j.status === 'failed' ? 'is-failed' : ''}`}>{j.message}</p>}
+                <p className="job-meta">Skill <code>{j.skill}</code> · job {j.id}</p>
+              </div>
+              {j.hasPreview && j.runner !== 'mock' && (
+                <img className="job-preview" src={`/api/production/jobs/${j.id}/preview`} alt={`Finished artwork: ${j.templateTitle ?? j.styleName}`} loading="lazy" />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

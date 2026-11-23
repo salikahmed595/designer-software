@@ -1,10 +1,10 @@
 /**
  * Data-driven artwork registry. Categories are for discovery only; the canonical
  * template id is what a production pipeline (Photoshop / Illustrator) would route on.
- * Everything here is 2D still artwork — nothing animated is offered.
+ * Artwork for streamers and gamers only. The five available categories are 2D still artwork;
+ * 3D is listed but not available until a 3D production pipeline is connected.
  */
-export type CategoryId = 'streaming' | 'discord' | 'characters' | 'emotes' | 'branding' | 'animation';
-export type StyleId = 'minimal' | 'anime' | 'cyberpunk' | 'fantasy' | 'cartoon' | 'esports';
+export type CategoryId = 'streaming' | 'discord' | 'characters' | 'emotes' | 'branding' | '3d';
 export type MadeIn = 'Illustrator' | 'Photoshop' | 'Illustrator + Photoshop';
 
 export interface Category {
@@ -26,8 +26,7 @@ export interface ArtworkTemplate {
   subtitle: string;
   aliases: string[];
   popular: boolean;
-  styles: StyleId[];
-  /** planned production route, shown to the designer */
+  /** usual production route for this artwork (a studio default, not a guarantee) */
   madeIn: MadeIn;
   /** label of the optional name/text field */
   nameLabel: string;
@@ -44,36 +43,8 @@ export const CATEGORIES: Category[] = [
   { id: 'characters', name: 'Characters & VTubers', subtitle: 'Avatars, models & mascots', keywords: ['character', 'oc', 'persona'], coverId: 'gaming-avatar', colors: ['#f08ad6', '#ffc9a8'], available: true },
   { id: 'emotes', name: 'Emotes & Badges', subtitle: 'Reactions, stickers & rewards', keywords: ['chat', 'reaction'], coverId: 'static-emotes', colors: ['#ffa25c', '#ffe07a'], available: true },
   { id: 'branding', name: 'Gaming Branding', subtitle: 'Logos, banners & esports art', keywords: ['brand', 'identity', 'youtube'], coverId: 'gaming-logo', colors: ['#a5ee5a', '#e8ff9a'], available: true },
-  { id: 'animation', name: 'Animation', subtitle: 'Motion graphics & moving artwork', keywords: [], coverId: 'animation-cover', colors: ['#21cae6', '#ab71ff'], available: false, unavailableNote: 'Coming later — 2D still artwork only for now' },
+  { id: '3d', name: '3D Artwork', subtitle: 'Models, renders & 3D characters', keywords: [], coverId: '3d-cover', colors: ['#21cae6', '#ab71ff'], available: false, unavailableNote: 'Coming soon — 3D production is not connected yet' },
 ];
-
-export const STYLE_META: Record<StyleId, { name: string; gradient: string }> = {
-  minimal: { name: 'Minimal', gradient: 'linear-gradient(135deg,#2a313a,#8794ad)' },
-  anime: { name: 'Anime', gradient: 'linear-gradient(135deg,#f08ad6,#7a5cf0)' },
-  cyberpunk: { name: 'Cyberpunk', gradient: 'linear-gradient(135deg,#5a3fd0,#21d4ed)' },
-  fantasy: { name: 'Fantasy', gradient: 'linear-gradient(135deg,#2e7d52,#c9a94e)' },
-  cartoon: { name: 'Cartoon', gradient: 'linear-gradient(135deg,#ff9a3d,#ffd95a)' },
-  esports: { name: 'Esports', gradient: 'linear-gradient(135deg,#d63a3a,#23262e)' },
-};
-
-const STYLE_SETS: Record<CategoryId, StyleId[]> = {
-  streaming: ['cyberpunk', 'minimal', 'anime', 'fantasy'],
-  discord: ['cyberpunk', 'minimal', 'anime', 'fantasy'],
-  characters: ['anime', 'cartoon', 'fantasy', 'cyberpunk'],
-  emotes: ['cartoon', 'anime', 'minimal'],
-  branding: ['esports', 'minimal', 'cyberpunk', 'fantasy'],
-  animation: [],
-};
-
-export interface Palette { id: string; name: string; main: string; secondary: string; words: string[] }
-export const PALETTES: Palette[] = [
-  { id: 'violet', name: 'Violet', main: '#966bff', secondary: '#18ddd5', words: ['purple', 'violet', 'lavender'] },
-  { id: 'lime', name: 'Lime', main: '#9cfb59', secondary: '#4285ff', words: ['green', 'lime', 'emerald'] },
-  { id: 'ocean', name: 'Ocean', main: '#3caaff', secondary: '#49e7de', words: ['blue', 'ocean', 'cyan', 'teal', 'aqua'] },
-  { id: 'rose', name: 'Rose', main: '#ff679b', secondary: '#9e83ff', words: ['pink', 'rose', 'magenta'] },
-  { id: 'ember', name: 'Ember', main: '#ff6a4d', secondary: '#fbb45a', words: ['red', 'orange', 'amber', 'gold', 'yellow', 'fire', 'crimson'] },
-];
-export const getPalette = (id: string): Palette => PALETTES.find((p) => p.id === id) ?? PALETTES[0];
 
 type Extra = Partial<Pick<ArtworkTemplate, 'nameLabel' | 'note' | 'bundle'>>;
 type Row = [id: string, title: string, subtitle: string, aliases: string, popular: boolean, madeIn: MadeIn, hint: string, extra?: Extra];
@@ -86,7 +57,6 @@ const rows = (categoryId: CategoryId, list: Row[]): ArtworkTemplate[] =>
   list.map(([id, title, subtitle, aliases, popular, madeIn, promptHint, extra]) => ({
     id, categoryId, title, subtitle, popular, madeIn, promptHint,
     aliases: aliases.split(',').map((a) => a.trim()).filter(Boolean),
-    styles: STYLE_SETS[categoryId],
     nameLabel: 'Name or text',
     ...extra,
   }));
@@ -144,7 +114,7 @@ export const TEMPLATES: ArtworkTemplate[] = [
   ]),
 ];
 
-export const HOME_POPULAR = ['stream-overlay', 'server-banner', 'gaming-avatar', 'static-emotes', 'gaming-logo', 'profile-art'];
+export const HOME_POPULAR = ['stream-overlay', 'gaming-logo', 'gaming-avatar', 'static-emotes', 'server-banner', 'webcam-frame', 'sub-badges', 'profile-art'];
 
 const byId = new Map(TEMPLATES.map((t) => [t.id, t]));
 const order = new Map(TEMPLATES.map((t, i) => [t.id, i]));
@@ -213,45 +183,3 @@ export function searchTemplates(query: string, categoryId?: CategoryId): Artwork
   return rank(query, categoryId).slice(0, MAX_RESULTS).map((r) => r.template);
 }
 
-/* ---------- intent ---------- */
-
-export interface Suggestion {
-  /** true when at least one template matched the words */
-  matched: boolean;
-  /** true only when one template clearly wins; otherwise the user must choose */
-  confident: boolean;
-  templates: ArtworkTemplate[];
-  /** colour inferred from the text — always shown as an editable draft */
-  paletteId: string | null;
-}
-
-export function inferPalette(prompt: string): string | null {
-  for (const w of words(prompt)) {
-    const p = PALETTES.find((x) => x.words.includes(w));
-    if (p) return p.id;
-  }
-  return null;
-}
-
-export function suggestFromPrompt(prompt: string): Suggestion {
-  const paletteId = inferPalette(prompt);
-  const ranked = rank(prompt);
-  if (ranked.length === 0) {
-    return { matched: false, confident: false, paletteId, templates: HOME_POPULAR.slice(0, 3).map((id) => byId.get(id)!) };
-  }
-  const [top, second] = ranked;
-  if (top.score >= 4 && top.score - (second?.score ?? 0) >= 2) {
-    return { matched: true, confident: true, paletteId, templates: [top.template] };
-  }
-  // Ambiguous: offer up to three, preferring options that cover different parts of the idea.
-  const picks: Ranked[] = [top];
-  const covered = new Set(top.hits);
-  while (picks.length < 3) {
-    const rest = ranked.filter((r) => !picks.includes(r));
-    if (rest.length === 0) break;
-    const next = rest.find((r) => [...r.hits].some((h) => !covered.has(h))) ?? rest[0];
-    picks.push(next);
-    next.hits.forEach((h) => covered.add(h));
-  }
-  return { matched: true, confident: false, paletteId, templates: picks.map((p) => p.template) };
-}

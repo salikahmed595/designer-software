@@ -46,8 +46,9 @@ export const ratioLabel = (ratio: Ratio): string => {
 export const MAX_BRIEF = 2000;
 export const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
 
-export function productionIssues(input: { artStyleId: string | null; brief: string; hasReference: boolean; referenceRole: RefRole | null }): string[] {
+export function productionIssues(input: { templateId: string | null; artStyleId: string | null; brief: string; hasReference: boolean; referenceRole: RefRole | null }): string[] {
   const issues: string[] = [];
+  if (!getTemplate(input.templateId)) issues.push('Choose an artwork.');
   if (!getArtStyle(input.artStyleId)) issues.push('Choose an art style.');
   if (input.brief.trim() === '') issues.push('Write the client brief.');
   if (input.hasReference && !input.referenceRole) issues.push('Say how the reference image should be used.');

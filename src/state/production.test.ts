@@ -34,9 +34,9 @@ describe('art style → skill registry', () => {
 
 describe('what the designer must provide', () => {
   it('needs a style and a brief; a reference needs a role', () => {
-    expect(productionIssues({ artStyleId: null, brief: '', hasReference: false, referenceRole: null })).toHaveLength(2);
-    expect(productionIssues({ artStyleId: 'chibi', brief: 'x', hasReference: true, referenceRole: null })).toEqual([expect.stringMatching(/reference/i)]);
-    expect(productionIssues({ artStyleId: 'chibi', brief: 'x', hasReference: true, referenceRole: 'Edit this image' })).toEqual([]);
+    expect(productionIssues({ templateId: null, artStyleId: null, brief: '', hasReference: false, referenceRole: null })).toHaveLength(3);
+    expect(productionIssues({ templateId: 'mascot', artStyleId: 'chibi', brief: 'x', hasReference: true, referenceRole: null })).toEqual([expect.stringMatching(/reference/i)]);
+    expect(productionIssues({ templateId: 'mascot', artStyleId: 'chibi', brief: 'x', hasReference: true, referenceRole: 'Edit this image' })).toEqual([]);
   });
 
   it('maps ratio to a canvas size', () => {

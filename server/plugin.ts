@@ -125,9 +125,9 @@ export function productionBridge(): Plugin {
       detail = 'The runner is switched off (LUMORA_RUNNER=off). Jobs are saved but not started.';
     } else if ((await runProcess(claudeBin, ['--version'], jobsDir, null, 20_000, null)) === 0) {
       runner = 'claude';
-      detail = 'Connected: a Claude Code agent will draw in Photoshop and Illustrator on this computer.';
+      detail = 'Connected: the agent will draw in Photoshop and Illustrator on this computer.';
     } else {
-      detail = 'Claude Code was not found on this computer, so jobs are saved but cannot start. Install the Claude Code CLI or set LUMORA_CLAUDE_BIN.';
+      detail = 'The drawing agent is not set up on this computer yet, so jobs are saved but cannot start. Ask your studio admin — the setup steps are in the README.';
     }
   })();
 

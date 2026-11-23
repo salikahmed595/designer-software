@@ -1,11 +1,8 @@
 import { useEffect, useReducer, useRef } from 'react';
 import { GlassHeader } from './glass/ui';
-import { CategoryPage, HomePage, ProjectsPage, ResultPage, SuggestionsPage, type PageProps } from './glass/pages';
-import { CustomizePage } from './glass/Customize';
-import { ProducePage } from './glass/Produce';
-import { ToolsPage, useClassicStudio } from './glass/ToolsPage';
+import { HomePage, type PageProps } from './glass/pages';
+import { BriefPage, JobsPage, useProductionBridge } from './glass/Produce';
 import { STORAGE_KEY, flowReducer, loadFlow, serialize } from './state/flow';
-import type { Mode } from './state/studio';
 
 const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp'];
 const MAX_REF_BYTES = 10 * 1024 * 1024;
@@ -20,16 +17,16 @@ const storage = (): Storage | undefined => {
 
 export default function App() {
   const [state, dispatch] = useReducer(flowReducer, undefined, () => loadFlow(storage()));
-  const studio = useClassicStudio();
+  const bridge = useProductionBridge();
   const fileRef = useRef<HTMLInputElement>(null);
   const firstRender = useRef(true);
 
-  // Save the brief and projects on this device (uploaded references are never stored).
+  // Keep the unfinished brief on this device (the uploaded reference image is never stored).
   useEffect(() => {
     try {
       storage()?.setItem(STORAGE_KEY, serialize(state));
     } catch {
-      /* storage full or blocked — the app keeps working without persistence */
+      /* storage full or blocked — the app keeps working without it */
     }
   }, [state]);
 
@@ -41,7 +38,7 @@ export default function App() {
     }
     document.getElementById('top')?.scrollIntoView?.({ block: 'start' });
     document.getElementById('page-title')?.focus({ preventScroll: true });
-  }, [state.page, state.categoryId, state.brief.templateId]);
+  }, [state.page, state.brief.templateId]);
 
   useEffect(() => {
     if (!state.notice) return;
@@ -59,42 +56,20 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const openTool = (mode: Mode) => {
-    studio.dispatch({ type: 'setMode', mode });
-    dispatch({ type: 'openTools', mode });
-  };
-
   const props: PageProps = { state, dispatch, onAddReference: () => fileRef.current?.click() };
-  const section = state.page === 'projects' ? 'projects' : state.page === 'tools' ? 'tools' : state.page === 'produce' ? 'production' : 'create';
 
   return (
     <div id="top" className="app-shell">
       <a href="#main" className="skip-link">Skip to content</a>
-      <GlassHeader
-        section={section}
-        projectCount={state.projects.length}
-        onHome={() => dispatch({ type: 'goHome' })}
-        onProjects={() => dispatch({ type: 'openProjects' })}
-        onProduce={() => dispatch({ type: 'openProduce' })}
-        onTool={openTool}
-      />
+      <GlassHeader page={state.page} activeJobs={bridge.activeJobs} onHome={() => dispatch({ type: 'goHome' })} onJobs={() => dispatch({ type: 'openJobs' })} />
 
       <main id="main">
-        <div key={`${state.page}-${state.categoryId}-${state.brief.templateId ?? ''}`} className="page-enter">
+        <div key={`${state.page}-${state.brief.templateId ?? ''}`} className="page-enter">
           {state.page === 'home' && <HomePage {...props} />}
-          {state.page === 'category' && <CategoryPage {...props} />}
-          {state.page === 'suggestions' && <SuggestionsPage {...props} />}
-          {state.page === 'customize' && <CustomizePage {...props} />}
-          {state.page === 'result' && <ResultPage {...props} />}
-          {state.page === 'projects' && <ProjectsPage {...props} />}
-          {state.page === 'produce' && <ProducePage {...props} />}
-          {state.page === 'tools' && (
-            <ToolsPage studio={studio} onHome={() => dispatch({ type: 'goHome' })} onNotify={(message) => dispatch({ type: 'notify', message })} />
-          )}
+          {state.page === 'brief' && <BriefPage {...props} bridge={bridge} />}
+          {state.page === 'jobs' && <JobsPage {...props} bridge={bridge} />}
         </div>
       </main>
-
-      <footer className="endnote">Lumora · 2D artwork studio · Artwork is drawn by an agent in Photoshop and Illustrator on the studio computer.</footer>
 
       <input
         ref={fileRef}
