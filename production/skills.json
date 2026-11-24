@@ -1,5 +1,5 @@
 {
-  "_readme": "Which skill draws each art style and artwork type. Change it on the Skills screen in the app (it saves this file). null = use the default skill.",
+  "_readme": "Which skill draws each art style and artwork type. Change it on the Skills screen in the app (it saves this file). null = use the default skill (hand-made types: the hand-made skill).",
   "defaultSkill": "2d-artwork-photoshop-illustrator",
   "styles": {
     "anime-cel": null,
@@ -59,6 +59,10 @@
     "team-banner": null,
     "tournament-poster": null,
     "gaming-wallpaper": null,
-    "merch-art": null
+    "merch-art": null,
+    "handmade-logo": "hand-made",
+    "handmade-emblem": "hand-made",
+    "handmade-illustration": "hand-made",
+    "handmade-character": "hand-made"
   }
 }

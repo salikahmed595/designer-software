@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { defaultSkillMap } from '../src/state/production';
-import { fakePsd, installSkill, listSkills, psdLayerCount, psdLayerCountOfFile, readSkillMap, writeSkillMap } from './files';
+import { fakePsd, installSkill, listSkills, psdLayerCount, psdLayerCountOfFile, readSkillMap, readSkillText, writeSkillMap } from './files';
 
 const reader = (buf: Buffer) => async (pos: number, len: number) => buf.subarray(pos, pos + len);
 
@@ -73,6 +73,13 @@ describe('installed skills', () => {
     expect(found.map((s) => s.name)).toEqual(['anime-art', 'broken', 'manga-effects', 'vtuber-master']);
     expect(found.find((s) => s.name === 'manga-effects')?.description).toBe('How to draw manga-effects.');
     expect(found.find((s) => s.name === 'broken')?.description).toBe('');
+  });
+
+  it('reads one skill’s full text from the first place that has it (for the hand-made job sheet)', async () => {
+    expect(await readSkillText([a, b], 'anime-art')).toBe(skillFile('anime-art'));
+    expect(await readSkillText([a, b], 'manga-effects')).toBe(skillFile('manga-effects'));
+    expect(await readSkillText([a, b], 'not-there')).toBeNull();
+    for (const bad of ['../anime-art', 'design:critique', '..', '']) expect(await readSkillText([a, b], bad), bad).toBeNull();
   });
 });
 

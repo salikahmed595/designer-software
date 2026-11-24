@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getTemplate } from '../state/catalog';
-import { MAX_BRIEF_CHARS, MAX_TEXT, RATIOS, REF_ROLES } from '../state/flow';
+import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS } from '../state/flow';
 import {
-  ART_STYLES, getArtStyle, productionIssues, ratioLabel, skillsFor, type BridgeHealth, type JobView, type SkillMap, type SkillRole, type SkillUse,
+  ART_STYLES, JOB_SHEET, getArtStyle, productionIssues, ratioLabel, skillsFor, type BridgeHealth, type JobView, type SkillMap, type SkillRole, type SkillUse,
 } from '../state/production';
 import { IconCheck, IconClose, IconPlus } from '../components/icons';
 import { ChoiceCheck, GuidedStepper, rise } from './ui';
@@ -17,7 +17,7 @@ const ROLE_LABEL: Record<SkillRole, string> = { style: 'Art style', artwork: 'Ar
 const jobSkills = (j: JobView & { skill?: string }): SkillUse[] => j.skills ?? (j.skill ? [{ name: j.skill, role: 'style' }] : []);
 
 /** Which skills will draw this job — so the designer can see the dedicated method is being used. */
-function DrawnWith({ skills }: { skills: SkillUse[] }) {
+export function DrawnWith({ skills, note = 'You get layered Photoshop / Illustrator files, drawn by hand: every part on its own named layer and text you can still edit.' }: { skills: SkillUse[]; note?: string }) {
   return (
     <div className="drawn-with">
       <p className="drawn-with-title">Drawn with</p>
@@ -30,7 +30,7 @@ function DrawnWith({ skills }: { skills: SkillUse[] }) {
           </li>
         ))}
       </ul>
-      <p className="drawn-with-note">You get layered Photoshop / Illustrator files, drawn by hand: every part on its own named layer and text you can still edit.</p>
+      <p className="drawn-with-note">{note}</p>
     </div>
   );
 }
@@ -88,7 +88,7 @@ export function useProductionBridge(): Bridge {
 }
 
 /** Shown only when something needs attention; a healthy connection gets a quiet one-line confirmation. */
-function BridgeNote({ health }: { health: BridgeHealth | null }) {
+export function BridgeNote({ health }: { health: BridgeHealth | null }) {
   if (health === null) return <p className="bridge-note is-quiet" role="status"><span className="dot" aria-hidden />Checking production…</p>;
   const ok = health.online && health.runner === 'claude';
   return <p className={`bridge-note ${ok ? 'is-ok' : ''}`} role="status"><span className="dot" aria-hidden />{health.detail}</p>;
@@ -226,7 +226,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
                 </div>
                 <p className="sub-label" id="role-label">How should the agent use it? <span className="required">Required</span></p>
                 <div role="radiogroup" aria-labelledby="role-label" className="pill-row">
-                  {REF_ROLES.map((r) => {
+                  {PICKABLE_REF_ROLES.map((r) => {
                     const on = brief.referenceRole === r;
                     return (
                       <button key={r} type="button" role="radio" aria-checked={on} className={`choice-pill ${on ? 'is-on' : ''}`} onClick={() => dispatch({ type: 'setReferenceRole', role: r })}>
@@ -335,10 +335,14 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
                     {j.files.includes('artwork.ai') && (
                       <a className="btn btn-sm" href={`/api/production/jobs/${j.id}/files/artwork.ai`} download>Download Illustrator file</a>
                     )}
+                    {j.files.includes(JOB_SHEET) && (
+                      <a className="btn btn-sm btn-primary" href={`/api/production/jobs/${j.id}/files/${JOB_SHEET}`} download>Download job sheet</a>
+                    )}
                   </div>
                 )}
                 <p className="job-meta">
-                  {jobSkills(j).length > 0 && <>Drawn with {jobSkills(j).map((s, k) => <span key={s.name}>{k > 0 && ' + '}<code>{s.name}</code></span>)} · </>}
+                  {j.handmade && <>Hand-made — a designer draws it{j.handmade === 'agent' ? ' (AI-assisted element list)' : ' (no AI)'} · </>}
+                  {jobSkills(j).length > 0 && <>{j.handmade ? 'Checklist from' : 'Drawn with'} {jobSkills(j).map((s, k) => <span key={s.name}>{k > 0 && ' + '}<code>{s.name}</code></span>)} · </>}
                   job {j.id}
                 </p>
               </div>

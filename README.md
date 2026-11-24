@@ -36,6 +36,17 @@ npm run build
 4. The bridge checks the result before calling it finished: there must be a preview **and** a layered source file. It reads the layer count from `artwork.psd`; a flattened PSD (one layer) is marked "Needs attention", because designers must be able to edit every part.
 5. The Jobs screen shows the status, the skills used, the notes, and **Download layered PSD** / **Download Illustrator file** buttons.
 
+### Hand-made (same design, no AI)
+
+For a client who wants their **own design recreated by a person, with no AI**. Pick **Hand-made** on the first screen (Logo, Emblem, Illustration or Character).
+
+- The brief asks for the **client's original** (required) instead of an art style. There is no size choice: the original decides.
+- **Changes from the original**: two lists, *Add to the design* and *Take out of the design*. Type an item and press Add (or Enter); delete an item with ×. Empty lists mean an exact copy. Only approved changes go in; everything else stays as it is.
+- **Send** creates a **job sheet** (`handmade-job-sheet.md`) at once: the rule (no generative AI, no auto-trace), the original's file name, the approved changes, the client's notes, a hand-over checklist and the full text of the `hand-made` skill. A designer downloads it from Jobs and draws the artwork by hand in Illustrator/Photoshop.
+- **No agent runs and no artwork is generated** for these jobs, so the sheet can truthfully say no AI was used to prepare it. The `hand-made` skill itself says an AI must not draw a job like this.
+- Optional: tick **Let the agent write a detailed element list**. The agent then looks at the original and writes an itemised sheet, which is marked *AI-assisted*. It runs with no Photoshop/Illustrator tools, and if it writes any image, PSD, AI or SVG file the job fails. Use this only if the client allows AI for planning, and tell them.
+- The skill lives in `~/.claude/skills/hand-made/SKILL.md`. The Skills screen can point hand-made types at another skill; an empty slot uses `hand-made`, never the general drawing skill.
+
 ### The Skills screen (add skills, default skill)
 
 Click **Skills** in the header. Everything is saved the moment you change it and is used for the next job; no restart is needed.
@@ -66,7 +77,7 @@ Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests),
 - The skills, canvas size and file names are decided on the server, never taken from the browser.
 - An added skill's name must be lowercase letters, numbers and hyphens, so it can't point outside the skills folder; files are capped at about 200 KB and never overwrite an existing skill.
 - The E2E tests use their own temporary copy of the skill map and their own install folder, so they never change your real skills.
-- Downloads serve only `artwork.psd` and `artwork.ai` from a job's `output/` folder — no other file or path.
+- Downloads serve only `artwork.psd`, `artwork.ai` and `handmade-job-sheet.md` from a job's `output/` folder — no other file or path.
 - The client's text stays in `job.json` as data; the agent is told to treat it as art direction only.
 - `production/jobs/` (client briefs and reference images) is never committed.
 

@@ -103,7 +103,7 @@ function SlotTable({ label, empty, slots, groupLabel, data, busy, onPick }: {
                           disabled={busy === `${s.kind}:${s.id}`}
                           onChange={(e) => onPick(s, e.target.value === DEFAULT_VALUE ? null : e.target.value)}
                         >
-                          <option value={DEFAULT_VALUE}>Default skill ({data.map.defaultSkill})</option>
+                          <option value={DEFAULT_VALUE}>{s.fallback === data.map.defaultSkill ? `Default skill (${s.fallback})` : `Hand-made skill (${s.fallback})`}</option>
                           {skillOptions(installed, s.skill).map((name) => <option key={name} value={name}>{name}</option>)}
                         </select>
                         {missing && <span className="skill-status is-missing">Not installed</span>}

@@ -9,7 +9,13 @@ import { getTemplate } from './catalog';
 
 export type Page = 'home' | 'brief' | 'jobs' | 'skills';
 
-export const REF_ROLES = ['Style reference', 'Character reference', 'Edit this image'] as const;
+/** 'Original to redraw' is used only by hand-made jobs (set automatically, never picked). */
+export const REF_ROLES = ['Style reference', 'Character reference', 'Edit this image', 'Original to redraw'] as const;
+export const PICKABLE_REF_ROLES = REF_ROLES.filter((r) => r !== 'Original to redraw');
+/** Hand-made: what the designer says to add or remove compared with the client's original. */
+export const MAX_CHANGES = 30;
+export const MAX_CHANGE_CHARS = 200;
+export interface Changes { add: string[]; remove: string[] }
 export type RefRole = (typeof REF_ROLES)[number];
 export const RATIOS = ['Auto', 'Square', 'Wide', 'Portrait'] as const;
 export type Ratio = (typeof RATIOS)[number];
@@ -27,6 +33,10 @@ export interface Brief {
   referenceName: string | null;
   referenceRole: RefRole | null;
   ratio: Ratio;
+  /** hand-made only: approved differences from the original (empty = exact copy) */
+  changes: Changes;
+  /** hand-made only: let the agent write a detailed element list (AI used for planning only) */
+  aiSheet: boolean;
 }
 
 export interface FlowState {
@@ -51,6 +61,9 @@ export type FlowAction =
   | { type: 'clearReference' }
   | { type: 'setReferenceRole'; role: RefRole }
   | { type: 'setRatio'; ratio: Ratio }
+  | { type: 'addChange'; list: keyof Changes; text: string }
+  | { type: 'removeChange'; list: keyof Changes; index: number }
+  | { type: 'setAiSheet'; on: boolean }
   | { type: 'showErrors' }
   | { type: 'jobSent' }
   | { type: 'notify'; message: string }
@@ -58,7 +71,18 @@ export type FlowAction =
 
 const emptyBrief = (): Brief => ({
   templateId: null, artStyleId: null, prompt: '', displayName: '', referenceName: null, referenceRole: null, ratio: 'Auto',
+  changes: { add: [], remove: [] }, aiSheet: false,
 });
+
+/** A clean change list from anything (typed text or stored data): trimmed, capped, no blanks. */
+export function cleanChanges(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim().slice(0, MAX_CHANGE_CHARS))
+    .filter(Boolean)
+    .slice(0, MAX_CHANGES);
+}
 
 export const initialFlow = (): FlowState => ({ page: 'home', brief: emptyBrief(), referencePreview: null, showErrors: false, notice: null });
 
@@ -89,6 +113,14 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return patch(state, { referenceRole: action.role });
     case 'setRatio':
       return patch(state, { ratio: action.ratio });
+    case 'addChange': {
+      const next = cleanChanges([...state.brief.changes[action.list], action.text]);
+      return patch(state, { changes: { ...state.brief.changes, [action.list]: next } });
+    }
+    case 'removeChange':
+      return patch(state, { changes: { ...state.brief.changes, [action.list]: state.brief.changes[action.list].filter((_, i) => i !== action.index) } });
+    case 'setAiSheet':
+      return patch(state, { aiSheet: action.on });
     case 'showErrors':
       return { ...state, showErrors: true };
     case 'jobSent':
@@ -121,6 +153,11 @@ export function hydrate(raw: unknown): FlowState {
       prompt: typeof b.prompt === 'string' ? b.prompt.slice(0, MAX_BRIEF_CHARS) : '',
       displayName: typeof b.displayName === 'string' ? b.displayName.slice(0, MAX_TEXT) : '',
       ratio: RATIOS.find((x) => x === b.ratio) ?? 'Auto',
+      changes: {
+        add: cleanChanges((b.changes as Record<string, unknown> | undefined)?.add),
+        remove: cleanChanges((b.changes as Record<string, unknown> | undefined)?.remove),
+      },
+      aiSheet: b.aiSheet === true,
     },
   };
 }

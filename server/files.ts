@@ -150,6 +150,21 @@ async function readStart(file: string): Promise<string | null> {
 
 const SAFE_FOLDER = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/** A skill's whole SKILL.md (up to 256 KB) from the first place that has it; null if missing or the name is not a plain folder name. */
+export async function readSkillText(dirs: string[], name: string): Promise<string | null> {
+  if (!SAFE_FOLDER.test(name)) return null;
+  for (const dir of dirs) {
+    try {
+      const file = path.join(path.resolve(dir), name, 'SKILL.md');
+      const stat = await fs.stat(file);
+      if (stat.isFile() && stat.size <= 256 * 1024) return await fs.readFile(file, 'utf8');
+    } catch {
+      /* not in this place */
+    }
+  }
+  return null;
+}
+
 /**
  * Installs a skill as <dir>/<name>/SKILL.md. Never overwrites: if the folder exists the install fails.
  * The name must already be validated (parseSkillFile); this re-checks it so no path can leave <dir>.

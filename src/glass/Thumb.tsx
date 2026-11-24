@@ -441,6 +441,49 @@ const ART: Record<string, Draw> = {
     </>
   ),
 
+  /* ---------- Hand-made: the original (left, dashed) redrawn by hand (right, with a pencil) ---------- */
+  'handmade-logo': (a, b) => (
+    <>
+      <rect x="14" y="20" width="56" height="62" rx="8" {...st('#ffffff', 1.5)} strokeDasharray="4 4" opacity=".5" />
+      <path d="M42 34l12 22H30z" {...st('#ffffff', 2)} opacity=".55" />
+      <rect x="90" y="20" width="56" height="62" rx="8" fill={D} />
+      <path d="M118 34l12 22h-24z" fill={a} />
+      <text x="118" y="72" {...tx(8, b)}>LOGO</text>
+      <path d="M74 51h12M82 47l4 4-4 4" {...st(b, 2.5)} />
+      <path d="M128 92l18-18 5 5-18 18-7 2z" fill={b} /><path d="M146 74l5 5" {...st(D, 2)} />
+    </>
+  ),
+  'handmade-emblem': (a, b) => (
+    <>
+      <path d="M80 12l34 10v26c0 22-14 36-34 46-20-10-34-24-34-46V22z" fill={D} />
+      <path d="M80 12l34 10v26c0 22-14 36-34 46-20-10-34-24-34-46V22z" {...st(a, 3)} />
+      {[62, 71, 80, 89, 98].map((x) => <path key={x} d={`M${x} 22l1.6 3.4 3.6.4-2.7 2.4.8 3.6-3.3-1.9-3.3 1.9.8-3.6-2.7-2.4 3.6-.4z`} fill={a} />)}
+      <circle cx="80" cy="54" r="12" fill={a} opacity=".85" />
+      <circle cx="75" cy="52" r="3" fill={b} /><circle cx="85" cy="52" r="3" fill={b} />
+      <path d="M40 48c-14-2-22 6-26 14 8-2 14 0 20 4M120 48c14-2 22 6 26 14-8-2-14 0-20 4" {...st(a, 3)} />
+      <path d="M118 96l16-16 5 5-16 16-7 2z" fill={b} />
+    </>
+  ),
+  'handmade-illustration': (a, b) => (
+    <>
+      <rect x="18" y="16" width="100" height="74" rx="6" fill={D} />
+      <circle cx="94" cy="38" r="10" fill={b} />
+      <path d="M18 82l30-32 22 22 16-14 32 24v8H18z" fill={a} opacity=".85" />
+      <path d="M118 92c6-4 10-10 12-18l14-40 6 2-12 40c-3 8-9 14-17 18z" fill={b} />
+      <path d="M144 34l6 2" {...st(D, 2)} />
+      <path d="M24 96c12-4 26-4 40 0" {...st('#ffffff', 2)} opacity=".5" />
+    </>
+  ),
+  'handmade-character': (a, b) => (
+    <>
+      {bust(66, 60, D, b, 1.25)}
+      <path d="M66 22c-14 0-22 10-22 22 6-6 12-8 22-8s16 2 22 8c0-12-8-22-22-22z" fill={a} />
+      <path d="M106 94l26-26 6 6-26 26-9 3z" fill={b} />
+      <path d="M132 68l6 6" {...st(D, 2)} />
+      <path d="M112 30c6 0 10 4 10 10M120 20c10 2 16 10 16 20" {...st(a, 2)} opacity=".6" />
+    </>
+  ),
+
   /* ---------- Cover for the not-yet-available 3D category ---------- */
   '3d-cover': (a, b) => (
     <>

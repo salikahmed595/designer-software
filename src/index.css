@@ -214,6 +214,23 @@ button.reference-box:hover { border-color: var(--accent); background: rgba(255, 
 .skill-status.is-missing { background: rgba(255, 119, 119, 0.14); color: var(--danger); }
 .skill-status.is-unknown { background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); }
 
+/* Hand-made brief: changes from the original */
+.exact-copy { margin-bottom: 4px; font-size: 15px; font-weight: 650; color: var(--accent); }
+.change-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.change-col { min-width: 0; }
+.change-list { display: grid; gap: 6px; margin-bottom: 10px; }
+.change-list li { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); font-size: 15px; overflow-wrap: anywhere; }
+.change-delete { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; color: var(--text-secondary); }
+.change-delete:hover { background: rgba(255, 119, 119, 0.16); color: var(--danger); }
+.change-add { display: flex; gap: 8px; }
+.change-add .field { min-height: 44px; padding: 10px 12px; font-size: 15px; }
+.change-add .btn { flex-shrink: 0; }
+.ai-sheet { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; line-height: 1.5; }
+.ai-sheet input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); }
+@media (max-width: 760px) {
+  .change-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Skills screen: pickers, default skill, add a skill */
 .skill-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .field.skill-select { width: auto; min-width: 220px; max-width: 100%; min-height: 42px; padding: 8px 12px; font-size: 14px; cursor: pointer; }

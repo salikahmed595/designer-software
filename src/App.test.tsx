@@ -11,7 +11,7 @@ type Runner = 'claude' | 'off';
 interface StubOptions { jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string }
 
 const SHIPPED = normalizeSkillMap(shipped)!;
-const ALL_INSTALLED = ['2d-artwork-photoshop-illustrator', '2d-pfp', '2dvector-photoshop-illustrator-salik', 'vtuber-master'];
+const ALL_INSTALLED = ['2d-artwork-photoshop-illustrator', '2d-pfp', '2dvector-photoshop-illustrator-salik', 'hand-made', 'vtuber-master'];
 
 /** Fake production bridge so no test ever starts a real agent. Skill changes go through the same rules as the real bridge. */
 function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {}) {
@@ -114,8 +114,8 @@ describe('step 1 — choose the artwork', () => {
     expect(container.querySelectorAll('[data-template] [data-thumb]')).toHaveLength(HOME_POPULAR.length);
 
     const tabs = within(screen.getByRole('tablist', { name: /artwork categories/i })).getAllByRole('tab');
-    expect(tabs.map((t) => t.textContent)).toEqual(['Popular', 'Streaming', 'Discord', 'Characters & VTubers', 'Emotes & Badges', 'Gaming Branding', '3D ArtworkComing soon']);
-    expect(tabs[6]).toBeDisabled();
+    expect(tabs.map((t) => t.textContent)).toEqual(['Popular', 'Streaming', 'Discord', 'Characters & VTubers', 'Emotes & Badges', 'Gaming Branding', 'Hand-made', '3D ArtworkComing soon']);
+    expect(tabs[7]).toBeDisabled();
 
     await user.click(screen.getByRole('tab', { name: 'Emotes & Badges' }));
     expect(within(artwork()).getAllByRole('button')).toHaveLength(8);
@@ -288,6 +288,88 @@ describe('finished artwork can be edited by the designer', () => {
   });
 });
 
+describe('Hand-made: the client’s own design, redrawn by a person with no AI', () => {
+  const PNG_FILE = () => new File([new Uint8Array([137, 80, 78, 71])], 'machine-corps.png', { type: 'image/png' });
+  const openHandmade = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole('tab', { name: 'Hand-made' }));
+    expect(within(artwork()).getAllByRole('button')).toHaveLength(4);
+    await user.click(within(artwork()).getByRole('button', { name: /hand-made emblem/i }));
+    expect(heading(/brief for hand-made emblem/i)).toBeInTheDocument();
+  };
+
+  it('asks for the original instead of an art style, and says plainly that no AI draws it', async () => {
+    const { user, posted } = setup();
+    await openHandmade(user);
+    expect(screen.queryByRole('radiogroup', { name: 'Art style' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Size' })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/no ai draws any part of it/i).length).toBeGreaterThan(0);
+    expect(within(screen.getByRole('list', { name: 'Drawn with' })).getByText('hand-made')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /send to production/i }));
+    expect(screen.getAllByRole('alert').map((a) => a.textContent)).toContain('Add the client’s original design — the image to redraw.');
+    expect(posted).toHaveLength(0);
+  });
+
+  it('the designer adds and removes changes, then sends a strict job with the original', async () => {
+    const { user, posted } = setup();
+    await openHandmade(user);
+    expect(screen.getByText(/none — an exact copy/i)).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'Something to add' }), 'A sixth star{Enter}');
+    await user.type(screen.getByRole('textbox', { name: 'Something to add' }), 'Gold outline');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+    await user.type(screen.getByRole('textbox', { name: 'Something to take out' }), 'The tagline');
+    await user.click(screen.getByRole('button', { name: 'Take out' }));
+    expect(within(screen.getByRole('list', { name: 'Add to the design' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([expect.stringContaining('A sixth star'), expect.stringContaining('Gold outline')]);
+    await user.click(screen.getByRole('button', { name: 'Delete “Gold outline”' }));
+    expect(within(screen.getByRole('list', { name: 'Add to the design' })).getAllByRole('listitem')).toHaveLength(1);
+
+    await user.upload(screen.getByLabelText('Upload reference image'), PNG_FILE());
+    expect(await screen.findAllByText('machine-corps.png')).toHaveLength(2); // the upload box and the checklist
+    await user.click(screen.getByRole('button', { name: /send to production/i }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Jobs' })).toBeInTheDocument();
+    expect(posted).toEqual([{
+      templateId: 'handmade-emblem', brief: '', handmadeMode: 'strict',
+      changes: { add: ['A sixth star'], remove: ['The tagline'] },
+      reference: { dataUrl: expect.stringMatching(/^data:image\/png;base64,/), role: 'Original to redraw' },
+    }]);
+  });
+
+  it('the agent may write the element list only when the designer ticks it, and that is marked AI-assisted', async () => {
+    const { user, posted } = setup();
+    await openHandmade(user);
+    const tick = screen.getByRole('checkbox', { name: /let the agent write a detailed element list/i });
+    expect(tick).not.toBeChecked();
+    await user.click(tick);
+    expect(screen.getByText(/ai-assisted: the agent looks at the original/i)).toBeInTheDocument();
+    await user.upload(screen.getByLabelText('Upload reference image'), PNG_FILE());
+    await screen.findAllByText('machine-corps.png');
+    await user.click(screen.getByRole('button', { name: /send to production/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Jobs' });
+    expect(posted[0]).toMatchObject({ handmadeMode: 'agent' });
+  });
+
+  it('a finished hand-made job offers its job sheet, not artwork', async () => {
+    const sheetJob = {
+      id: 'cccccccccccc', createdAt: 3, status: 'done', styleName: 'Matches the original', ratio: 'Auto', templateTitle: 'Hand-made Emblem', briefExcerpt: 'Exact copy of the client’s original',
+      runner: 'claude', message: 'Job sheet ready. A designer draws this by hand — no AI was used for this job.', hasPreview: false, files: ['handmade-job-sheet.md'], layers: null,
+      skills: [{ name: 'hand-made', role: 'artwork' }], handmade: 'strict',
+    };
+    const { user } = setup('claude', { jobs: [sheetJob] });
+    await openJobs(user);
+    const job = within(await screen.findByRole('list', { name: 'Jobs' })).getByRole('listitem');
+    expect(within(job).getByRole('link', { name: /download job sheet/i })).toHaveAttribute('href', '/api/production/jobs/cccccccccccc/files/handmade-job-sheet.md');
+    expect(within(job).queryByRole('link', { name: /psd/i })).not.toBeInTheDocument();
+    expect(job).toHaveTextContent(/hand-made/i);
+  });
+
+  it('on the Skills screen, hand-made types fall back to the hand-made skill, not the default', async () => {
+    const { user } = setup();
+    await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'Skills' }));
+    await screen.findByRole('table', { name: 'Artwork types' });
+    const pick = screen.getByRole('combobox', { name: 'Skill for Hand-made Logo' });
+    expect(within(pick).getAllByRole('option')[0]).toHaveTextContent('Hand-made skill (hand-made)');
+  });
+});
+
 describe('the Skills section (designers manage skills here)', () => {
   const openSkills = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'Skills' }));
@@ -405,7 +487,7 @@ describe('the Skills section (designers manage skills here)', () => {
   });
 
   it('warns about a skill that is not installed on this computer, without hiding the choice', async () => {
-    const { user } = setup('claude', { installed: ['2d-artwork-photoshop-illustrator', 'vtuber-master', '2dvector-photoshop-illustrator-salik'] });
+    const { user } = setup('claude', { installed: ['2d-artwork-photoshop-illustrator', 'vtuber-master', '2dvector-photoshop-illustrator-salik', 'hand-made'] });
     await openSkills(user);
     expect(screen.getByText(/1 skill is not installed on this computer: 2d-pfp/i)).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Skill for Cinematic PFP' })).toHaveValue('2d-pfp');

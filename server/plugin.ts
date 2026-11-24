@@ -19,17 +19,22 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import {
-  SOURCE_FILES, applySkillChange, buildAgentPrompt, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
-  type BridgeHealth, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState, type SourceFile,
+  DOWNLOAD_FILES, HAND_MADE_SKILL, JOB_SHEET, SOURCE_FILES, applySkillChange, buildAgentPrompt, buildHandmadePrompt, handmadeJobSheet,
+  judgeHandmade, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
+  type BridgeHealth, type DownloadFile, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
 } from '../src/state/production';
 import {
-  fakePsd, installSkill, listSkills, psdLayerCountOfFile, readSkillMap, skillDirs, skillInstallDir, writeSkillMap,
+  fakePsd, installSkill, listSkills, psdLayerCountOfFile, readSkillMap, readSkillText, skillDirs, skillInstallDir, writeSkillMap,
 } from './files';
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const AGENT_TIMEOUT_MS = 45 * 60 * 1000;
 /** The agent can draw in the Adobe apps and read/write files — no shell, no network tools. */
 const ALLOWED_TOOLS = 'mcp__photoshop,mcp__illustrator,Skill,Read,Write,Edit,Glob,Grep';
+/** Hand-made jobs: the agent may only read and write the job sheet — no Adobe tools, so it cannot draw. */
+const HANDMADE_TOOLS = 'Skill,Read,Write,Glob,Grep';
+/** Anything in a hand-made job's output that would mean the agent made artwork. */
+const ARTWORK_FILE = /\.(psd|psb|ai|svg|png|jpe?g|webp|pdf|eps|tiff?)$/i;
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 const JOB_ID = /^[a-z0-9]{12}$/;
 const PLACEHOLDER_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
@@ -165,12 +170,22 @@ export function productionBridge(): Plugin {
     return 0;
   }
 
+  /** Demo runner for an agent-written hand-made job sheet. */
+  async function runMockHandmade(out: string): Promise<number> {
+    await new Promise((r) => setTimeout(r, 400));
+    await fs.writeFile(path.join(out, JOB_SHEET), '# Hand-made job sheet (demo)\n\nAI-assisted: demo runner placeholder. No artwork was made.\n');
+    await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({ ok: true, notes: 'Demo runner — placeholder job sheet.' }));
+    return 0;
+  }
+
   async function runJob(job: StoredJob): Promise<void> {
     const out = path.join(job.dir, 'output');
     await fs.mkdir(out, { recursive: true });
+    const handmade = job.handmade === 'agent';
+    const prompt = () => fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8');
     const exitCode = runner === 'mock'
-      ? await runMock(out)
-      : await runProcess(claudeBin, ['-p', '--allowedTools', ALLOWED_TOOLS], job.dir, await fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8'), AGENT_TIMEOUT_MS, path.join(job.dir, 'agent.log'));
+      ? await (handmade ? runMockHandmade(out) : runMock(out))
+      : await runProcess(claudeBin, ['-p', '--allowedTools', handmade ? HANDMADE_TOOLS : ALLOWED_TOOLS], job.dir, await prompt(), AGENT_TIMEOUT_MS, path.join(job.dir, 'agent.log'));
 
     let notes: string | null = null;
     let reportedOk: boolean | null = null;
@@ -181,7 +196,15 @@ export function productionBridge(): Plugin {
     } catch {
       /* the agent did not write a result file */
     }
-    const files: SourceFile[] = [];
+    if (handmade) {
+      const made = (await fs.readdir(out).catch(() => [] as string[])).filter((f) => ARTWORK_FILE.test(f));
+      const hasSheet = await exists(path.join(out, JOB_SHEET));
+      const verdict = judgeHandmade({ hasSheet, madeArtwork: made.length > 0, reportedOk, notes, exitCode });
+      await update(job.id, { status: verdict.status, message: verdict.message, hasPreview: false, files: verdict.status === 'done' ? [JOB_SHEET] : [], layers: null });
+      return;
+    }
+
+    const files: DownloadFile[] = [];
     for (const f of SOURCE_FILES) if (await exists(path.join(out, f))) files.push(f);
     const hasPsd = files.includes('artwork.psd');
     const hasPreview = await exists(path.join(out, 'preview.png'));
@@ -235,12 +258,24 @@ export function productionBridge(): Plugin {
       path.join(dir, 'job.json'),
       JSON.stringify({ ...rest, reference: reference ? { file: `reference.${reference.ext}`, role: reference.role } : null }, null, 2),
     );
-    await fs.writeFile(path.join(dir, 'prompt.txt'), buildAgentPrompt(job, dir));
-    const stored: StoredJob = {
-      id, dir, createdAt: Date.now(), status: 'queued', styleName: job.styleName, skills: job.skills, ratio: job.ratio, templateTitle: job.templateTitle,
-      briefExcerpt: job.brief.length > 140 ? `${job.brief.slice(0, 140)}…` : job.brief, runner,
-      message: runner === 'off' ? 'Saved. It will not start until a runner is available.' : null, hasPreview: false, files: [], layers: null,
-    };
+    const createdAt = Date.now();
+    const mode = job.handmade?.mode ?? null;
+    const briefExcerpt = job.brief === '' && mode ? 'Exact copy of the client’s original' : job.brief.length > 140 ? `${job.brief.slice(0, 140)}…` : job.brief;
+    const base = { id, dir, createdAt, styleName: job.styleName, skills: job.skills, ratio: job.ratio, templateTitle: job.templateTitle, briefExcerpt, runner, handmade: mode, layers: null, hasPreview: false };
+
+    // Strict hand-made: no agent at all. The sheet is built from the designer's notes and the skill's text.
+    if (mode === 'strict') {
+      const skillName = job.skills[0]?.name ?? HAND_MADE_SKILL;
+      const sheet = handmadeJobSheet(job, { id, createdAt, skillName, skillText: await readSkillText(skillDirs(), skillName), referenceFile: reference ? `reference.${reference.ext}` : null });
+      await fs.writeFile(path.join(dir, 'output', JOB_SHEET), sheet);
+      const stored: StoredJob = { ...base, status: 'done', message: 'Job sheet ready. A designer draws this by hand — no AI was used for this job.', files: [JOB_SHEET] };
+      jobs.set(id, stored);
+      await save(stored);
+      return stored;
+    }
+
+    await fs.writeFile(path.join(dir, 'prompt.txt'), mode === 'agent' ? buildHandmadePrompt(job, dir) : buildAgentPrompt(job, dir));
+    const stored: StoredJob = { ...base, status: 'queued', message: runner === 'off' ? 'Saved. It will not start until a runner is available.' : null, files: [] };
     jobs.set(id, stored);
     await save(stored);
     if (runner !== 'off') {
@@ -320,7 +355,8 @@ export function productionBridge(): Plugin {
     const checked = validateJobRequest(map, body);
     if (!checked.ok) return send(res, 400, { error: checked.errors.join(' ') });
     // A real agent can't draw with a skill that isn't installed — say so now instead of failing later.
-    if (runner === 'claude') {
+    // (A strict hand-made job runs no agent, so a missing skill only means its steps are left out of the sheet.)
+    if (runner === 'claude' && checked.job.handmade?.mode !== 'strict') {
       const have = new Set(installed.map((s) => s.name));
       const missing = checked.job.skills.filter((s) => skillStatus(s.name, have) === 'missing').map((s) => `“${s.name}”`);
       if (missing.length > 0) {
@@ -344,16 +380,16 @@ export function productionBridge(): Plugin {
       createReadStream(file).pipe(res);
       return;
     }
-    // Only the two fixed source-file names can ever be served — no paths from the request reach the disk.
-    const download = /^jobs\/([a-z0-9]+)\/files\/([a-z.]+)$/.exec(route);
+    // Only fixed file names (the two sources and the hand-made job sheet) can ever be served — no paths from the request reach the disk.
+    const download = /^jobs\/([a-z0-9]+)\/files\/([a-z.-]+)$/.exec(route);
     if (req.method === 'GET' && download && JOB_ID.test(download[1])) {
-      const name = SOURCE_FILES.find((f) => f === download[2]);
+      const name = DOWNLOAD_FILES.find((f) => f === download[2]);
       const job = jobs.get(download[1]);
       const file = job && name ? path.join(job.dir, 'output', name) : null;
       if (!file || !name || !(await exists(file))) return send(res, 404, { error: 'That file is not there.' });
       const base = (job?.templateTitle ?? 'artwork').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'artwork';
       res.statusCode = 200;
-      res.setHeader('Content-Type', name.endsWith('.psd') ? 'image/vnd.adobe.photoshop' : 'application/postscript');
+      res.setHeader('Content-Type', name.endsWith('.psd') ? 'image/vnd.adobe.photoshop' : name.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'application/postscript');
       res.setHeader('Content-Disposition', `attachment; filename="${base}-${download[1]}${path.extname(name)}"`);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');

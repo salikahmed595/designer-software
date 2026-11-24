@@ -123,7 +123,7 @@ test('a designer adds their own skill, uses it for a style, and changes the defa
 
   await nav.getByRole('button', { name: 'Skills' }).click();
   await expect(h1(page, /^skills$/i)).toBeVisible();
-  await expect(page.getByRole('table', { name: 'Artwork types' }).getByRole('row')).toHaveCount(41);
+  await expect(page.getByRole('table', { name: 'Artwork types' }).getByRole('row')).toHaveCount(45);
   const defaultPick = page.getByRole('combobox', { name: 'Default skill' });
   await expect(defaultPick).toHaveValue('2d-artwork-photoshop-illustrator');
   await noOverflow(page);
@@ -168,6 +168,46 @@ test('a designer adds their own skill, uses it for a style, and changes the defa
   expect(errors).toEqual([]);
 });
 
+test('hand-made: the original + the designer’s changes become a job sheet, with no agent and no artwork', async ({ page, isMobile }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const extra = `Gold rim ${isMobile ? 'm' : 'd'} ${Date.now()}`;
+
+  await page.getByRole('tab', { name: 'Hand-made' }).click();
+  await page.getByRole('list', { name: 'Artwork' }).getByRole('button').filter({ hasText: 'Hand-made Emblem' }).click();
+  await expect(h1(page, /brief for hand-made emblem/i)).toBeVisible();
+  await expect(page.getByRole('radiogroup', { name: 'Art style' })).toHaveCount(0);
+  await noOverflow(page);
+
+  await page.getByRole('button', { name: /send to production/i }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Add the client’s original design' })).toBeVisible();
+
+  await page.getByRole('textbox', { name: 'Something to add' }).fill(extra);
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Something to take out' }).fill('The small tagline');
+  await page.getByRole('textbox', { name: 'Something to take out' }).press('Enter');
+  await expect(page.getByRole('list', { name: 'Take out of the design' }).getByRole('listitem')).toHaveCount(1);
+  await page.locator('input[type=file]').setInputFiles({ name: 'machine-corps.png', mimeType: 'image/png', buffer: PNG });
+  await page.getByRole('button', { name: /send to production/i }).click();
+
+  await expect(h1(page, /^jobs$/i)).toBeVisible();
+  const job = page.getByRole('list', { name: 'Jobs' }).getByRole('listitem').filter({ hasText: 'Hand-made Emblem' }).first();
+  await expect(job).toHaveAttribute('data-status', 'done');
+  await expect(job).toContainText(/no ai was used/i);
+  await expect(job.getByRole('link', { name: /psd|illustrator/i })).toHaveCount(0);
+  const href = await job.getByRole('link', { name: 'Download job sheet' }).getAttribute('href');
+  const sheet = await page.request.get(href!);
+  expect(sheet.status()).toBe(200);
+  expect(sheet.headers()['content-type']).toMatch(/^text\/markdown/);
+  const text = await sheet.text();
+  expect(text).toContain('No AI was used to prepare this job sheet');
+  expect(text).toContain(`- Add: ${extra}`);
+  expect(text).toContain('- Remove: The small tagline');
+  expect(text).toMatch(/## The skill: hand-made/);
+  await noOverflow(page);
+  expect(errors).toEqual([]);
+});
+
 test('the skills API refuses bad input and other websites', async ({ request }) => {
   const assign = (data: unknown, headers: Record<string, string> = {}) => request.post('/api/production/skills/assign', { data, headers });
   expect((await assign({ kind: 'style', id: 'manga', skill: 'not-installed-anywhere-zz' })).status()).toBe(400);
@@ -190,7 +230,7 @@ test('the production bridge refuses bad input and other websites', async ({ requ
   expect((await request.get('/api/production/skills', { headers: { Origin: 'https://evil.example' } })).status()).toBe(403);
 });
 
-test('only the two layered source files can ever be downloaded', async ({ request }) => {
+test('only the layered source files and the hand-made job sheet can ever be downloaded', async ({ request }) => {
   const made = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `download guard ${Date.now()}`, templateId: 'mascot' } });
   expect(made.status()).toBe(201);
   const { job } = (await made.json()) as { job: { id: string } };

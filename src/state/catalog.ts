@@ -4,7 +4,7 @@
  * Artwork for streamers and gamers only. The five available categories are 2D still artwork;
  * 3D is listed but not available until a 3D production pipeline is connected.
  */
-export type CategoryId = 'streaming' | 'discord' | 'characters' | 'emotes' | 'branding' | '3d';
+export type CategoryId = 'streaming' | 'discord' | 'characters' | 'emotes' | 'branding' | 'handmade' | '3d';
 export type MadeIn = 'Illustrator' | 'Photoshop' | 'Illustrator + Photoshop';
 
 export interface Category {
@@ -43,11 +43,14 @@ export const CATEGORIES: Category[] = [
   { id: 'characters', name: 'Characters & VTubers', subtitle: 'Avatars, models & mascots', keywords: ['character', 'oc', 'persona'], coverId: 'gaming-avatar', colors: ['#f08ad6', '#ffc9a8'], available: true },
   { id: 'emotes', name: 'Emotes & Badges', subtitle: 'Reactions, stickers & rewards', keywords: ['chat', 'reaction'], coverId: 'static-emotes', colors: ['#ffa25c', '#ffe07a'], available: true },
   { id: 'branding', name: 'Gaming Branding', subtitle: 'Logos, banners & esports art', keywords: ['brand', 'identity', 'youtube'], coverId: 'gaming-logo', colors: ['#a5ee5a', '#e8ff9a'], available: true },
+  { id: 'handmade', name: 'Hand-made', subtitle: 'The client’s own design, redrawn by a person — no AI', keywords: ['handmade', 'hand', 'drawn', 'manual', 'human', 'redraw', 'recreate', 'copy', 'same', 'no', 'ai', 'without'], coverId: 'handmade-emblem', colors: ['#e8c27a', '#7ad0b0'], available: true },
   { id: '3d', name: '3D Artwork', subtitle: 'Models, renders & 3D characters', keywords: [], coverId: '3d-cover', colors: ['#21cae6', '#ab71ff'], available: false, unavailableNote: 'Coming soon — 3D production is not connected yet' },
 ];
 
 type Extra = Partial<Pick<ArtworkTemplate, 'nameLabel' | 'note' | 'bundle'>>;
 type Row = [id: string, title: string, subtitle: string, aliases: string, popular: boolean, madeIn: MadeIn, hint: string, extra?: Extra];
+
+const HANDMADE_NOTE = 'A job sheet for a designer, who redraws the client’s original by hand. No AI draws any part of it.';
 
 const AI: MadeIn = 'Illustrator';
 const PS: MadeIn = 'Photoshop';
@@ -112,7 +115,17 @@ export const TEMPLATES: ArtworkTemplate[] = [
     ['gaming-wallpaper', 'Gaming Wallpaper', 'Custom desktop background', 'wallpaper, desktop, background', false, PS, 'A wide scene with a calm centre for icons'],
     ['merch-art', 'Merch Artwork', 'Graphics for jerseys and tees', 'jersey, t-shirt, apparel, hoodie', false, AI, 'A front print with few colours', { nameLabel: 'Text on the print' }],
   ]),
+  // Hand-made: the client wants their existing design recreated with no AI. The app prepares a job sheet; a designer draws it.
+  ...rows('handmade', [
+    ['handmade-logo', 'Hand-made Logo', 'Same logo, redrawn by hand', 'hand made logo, handmade logo, redraw logo, recreate logo, no ai logo, manual logo', true, AI, 'Anything the client said about the original', { note: HANDMADE_NOTE }],
+    ['handmade-emblem', 'Hand-made Emblem', 'Crests, badges and team marks', 'hand made emblem, crest, badge, shield, team mark, no ai emblem', true, BOTH, 'Anything the client said about the original', { note: HANDMADE_NOTE }],
+    ['handmade-illustration', 'Hand-made Illustration', 'Same illustration, redrawn by hand', 'hand made illustration, redraw art, recreate artwork, no ai art, human made', false, PS, 'Anything the client said about the original', { note: HANDMADE_NOTE }],
+    ['handmade-character', 'Hand-made Character', 'Same character, redrawn by hand', 'hand made character, redraw character, mascot redraw, no ai character', false, PS, 'Anything the client said about the original', { note: HANDMADE_NOTE }],
+  ]),
 ];
+
+/** Hand-made artwork: the client's design, recreated by a person. No AI draws it. */
+export const isHandmade = (templateId: string | null | undefined): boolean => getTemplate(templateId)?.categoryId === 'handmade';
 
 export const HOME_POPULAR = ['stream-overlay', 'gaming-logo', 'gaming-avatar', 'static-emotes', 'server-banner', 'webcam-frame', 'sub-badges', 'profile-art'];
 
