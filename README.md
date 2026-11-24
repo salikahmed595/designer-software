@@ -71,6 +71,23 @@ The bridge looks for a `claude` command. Until it finds one, jobs (hand-made red
 $env:LUMORA_CLAUDE_BIN = "C:\path\to\claude.exe"; npm run dev
 ```
 
+The agent only uses **Photoshop 2024 and Illustrator 2024** (never another version). At startup the bridge checks both are installed and registers the `photoshop` / `illustrator` MCP servers with Claude Code if they are missing; if either app is missing, the Jobs screen says what to install.
+
+#### Backup Claude accounts (when one runs out)
+
+A job runs on this computer's Claude login first. If that account is out of usage (or can't sign in), the same job moves on to the next account. A drawing failure is never retried on another account. Set backups as **Windows user environment variables**, never in a file in this repo, then close the terminal and start the app from a new one:
+
+1. Another Claude subscription: in a terminal run `claude setup-token`, sign in with the **other** account in the browser, and copy the token it prints. Then save it as `LUMORA_CLAUDE_TOKEN_2`, with `_3`, `_4`… for more accounts:
+   ```powershell
+   [Environment]::SetEnvironmentVariable('LUMORA_CLAUDE_TOKEN_2', (Read-Host 'Paste the token'), 'User')
+   ```
+2. An Anthropic API key (pay per use, from console.anthropic.com), tried last:
+   ```powershell
+   [Environment]::SetEnvironmentVariable('LUMORA_ANTHROPIC_API_KEY', (Read-Host 'Paste the API key'), 'User')
+   ```
+
+The Jobs screen then shows the order, e.g. "this computer's Claude login → backup Claude account 2 → Anthropic API key", and each job card says which account it ran on. Each agent run gets only its own account's credential; the token and key never go into job files, prompts or logs. API-key runs use the CLI's `--bare` mode, the only mode in which it uses a key while a subscription login exists; the Adobe connectors are passed to it explicitly.
+
 Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests), `LUMORA_RUNNER=off` (save jobs only), `LUMORA_JOBS_DIR` (where job folders go; it must be inside the Adobe tool servers' allowed folders).
 
 ### Safety
