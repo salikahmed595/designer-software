@@ -20,6 +20,13 @@ const VERSION = '1.0.0';
 const UA = `lumora-design-assets/${VERSION} (design studio tool)`;
 const TIMEOUT_MS = 30_000;
 const MAX_BYTES = 60 * 1024 * 1024;
+// Loads a per-user font file into the current session (AddFontResource) and broadcasts WM_FONTCHANGE. Prints the count loaded.
+const ACTIVATE_FONT_PS = [
+  '$f = $env:DESIGN_ASSETS_FONT_FILE;',
+  "Add-Type -Namespace W -Name F -MemberDefinition '[DllImport(\"gdi32.dll\", CharSet=CharSet.Unicode)] public static extern int AddFontResourceW(string f); [DllImport(\"user32.dll\")] public static extern System.IntPtr SendMessageTimeoutW(System.IntPtr h, uint m, System.IntPtr w, System.IntPtr l, uint fl, uint t, out System.IntPtr r);';",
+  '$n = [W.F]::AddFontResourceW($f); $r = [IntPtr]::Zero;',
+  '[void][W.F]::SendMessageTimeoutW([IntPtr]0xffff, 0x001D, [IntPtr]::Zero, [IntPtr]::Zero, 2, 5000, [ref]$r); $n',
+].join(' ');
 // Poly Haven's API terms (July 2026) ask services that use the API live to show this credit.
 const POLY_HAVEN_CREDIT = 'Powered by Poly Haven';
 const SAVE_ROOTS = [];
@@ -343,7 +350,15 @@ async function callTool(name, a = {}) {
       await new Promise((resolve, reject) =>
         execFile('reg', ['add', 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts', '/v', label, '/t', 'REG_SZ', '/d', target, '/f'], { windowsHide: true }, (err) => (err ? reject(err) : resolve())),
       ).catch(() => fail('Windows refused to register the font.'));
-      return { installed: target, for: 'current Windows user only', note: 'If Photoshop or Illustrator do not list it yet, they need a restart.' };
+      // The registry entry alone only takes effect at the next sign-in: load the font into this session now
+      // and tell running apps the font list changed. The path goes in an environment variable, never into the script text.
+      const loaded = await new Promise((resolve) =>
+        execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ACTIVATE_FONT_PS], { windowsHide: true, timeout: 30_000, env: { ...process.env, DESIGN_ASSETS_FONT_FILE: target } }, (err, stdout) => resolve(err ? 0 : Number(String(stdout).trim().split(/\s+/).pop()) || 0)),
+      );
+      return {
+        installed: target, for: 'current Windows user only', active_now: loaded > 0,
+        note: loaded > 0 ? 'Photoshop and Illustrator list new fonts only after a restart if they were already open.' : 'Registered, but Windows did not load it into this session: it becomes available after the next sign-in.',
+      };
     }
 
     case 'textures_search': {
