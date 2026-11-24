@@ -198,6 +198,7 @@ export function productionBridge(): Plugin {
     const verdict = judgeResult({
       hasPreview, hasPsd, hasAi: files.includes('artwork.ai'), psdLayers: hasPsd ? await psdLayerCountOfFile(path.join(out, 'artwork.psd')) : null,
       reportedOk, notes, exitCode,
+      agentLog: hasPreview ? null : (await fs.readFile(path.join(job.dir, 'agent.log'), 'utf8').catch(() => '')).slice(-4000),
     });
     await update(job.id, { status: verdict.status, message: verdict.message, layers: verdict.layers, hasPreview, files });
   }

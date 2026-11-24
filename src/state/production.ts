@@ -497,6 +497,23 @@ export interface AgentOutput {
   notes: string | null;
   /** agent exit code; null = it could not start or timed out */
   exitCode: number | null;
+  /** the end of agent.log, used to explain an early stop */
+  agentLog?: string | null;
+}
+
+/** A plain reason when Claude Code itself refused to run the job (usage limit, not signed in), else null. */
+export function agentLogProblem(log: string | null | undefined): string | null {
+  if (!log) return null;
+  if (/hit your .*limit/i.test(log)) {
+    const reset = /resets\s+([^\r\n]+)/i.exec(log)?.[1]?.trim();
+    return reset
+      ? `Claude’s usage limit is used up, so nothing was drawn. It resets at ${reset} — send this artwork again after that.`
+      : 'Claude’s usage limit is used up, so nothing was drawn. Send this artwork again once it resets.';
+  }
+  if (/invalid api key|please run \/login|not logged in/i.test(log)) {
+    return 'Claude Code is not signed in on this computer, so nothing was drawn. Run “claude” in a terminal, sign in, then send this artwork again.';
+  }
+  return null;
 }
 
 /**
@@ -508,7 +525,7 @@ export function judgeResult(o: AgentOutput): { status: 'done' | 'failed'; messag
   const fail = (message: string) => ({ status: 'failed' as const, message, layers });
   if (o.reportedOk === false) return fail(o.notes ?? 'The agent reported that it could not finish.');
   if (!o.hasPreview) {
-    return fail(o.notes ?? (o.exitCode === null
+    return fail(o.notes ?? agentLogProblem(o.agentLog) ?? (o.exitCode === null
       ? 'The agent could not be started or timed out.'
       : `The agent stopped (exit code ${o.exitCode}) without exporting a preview. See agent.log in the job folder.`));
   }

@@ -377,6 +377,26 @@ describe('judging what the agent saved', () => {
     expect(judgeResult({ ...base, hasPreview: false, reportedOk: null, notes: null, exitCode: 1 }).message).toMatch(/exit code 1/);
     expect(judgeResult({ ...base, hasPreview: false, reportedOk: null, notes: null, exitCode: null }).message).toMatch(/could not be started or timed out/i);
   });
+
+  const stopped = { ...base, hasPreview: false, hasPsd: false, psdLayers: null, reportedOk: null, notes: null, exitCode: 1 };
+
+  it('says plainly when Claude’s usage limit stopped the agent, with the reset time', () => {
+    // exact text from a real agent.log on this PC
+    const r = judgeResult({ ...stopped, agentLog: 'You’ve hit your 5-hour limit · resets 7:30pm (Asia/Karachi)\n' });
+    expect(r.status).toBe('failed');
+    expect(r.message).toBe('Claude’s usage limit is used up, so nothing was drawn. It resets at 7:30pm (Asia/Karachi) — send this artwork again after that.');
+    expect(judgeResult({ ...stopped, agentLog: "You've hit your weekly limit · resets Mon, Nov 30, 7:00 PM" }).message).toMatch(/resets at Mon, Nov 30, 7:00 PM/);
+    expect(judgeResult({ ...stopped, agentLog: "You've hit your usage limit" }).message).toBe('Claude’s usage limit is used up, so nothing was drawn. Send this artwork again once it resets.');
+  });
+
+  it('says when Claude Code is not signed in', () => {
+    expect(judgeResult({ ...stopped, agentLog: 'Invalid API key · Please run /login' }).message).toMatch(/not signed in/i);
+  });
+
+  it('keeps the generic message for any other log, and the agent’s own notes win', () => {
+    expect(judgeResult({ ...stopped, agentLog: 'something else broke' }).message).toMatch(/exit code 1/);
+    expect(judgeResult({ ...stopped, notes: 'Photoshop crashed.', agentLog: "You've hit your usage limit" }).message).toBe('Photoshop crashed.');
+  });
 });
 
 describe('handing in the hand-drawn artwork (a designer uploads the finished PSD / AI)', () => {
