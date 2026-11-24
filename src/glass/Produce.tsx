@@ -3,7 +3,7 @@ import { getTemplate } from '../state/catalog';
 import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS } from '../state/flow';
 import {
   ART_STYLES, HAND_IN, JOB_SHEET, getArtStyle, handInFileIssue, productionIssues, ratioLabel, skillsFor,
-  type BridgeHealth, type HandInKind, type JobView, type SkillMap, type SkillRole, type SkillUse,
+  type BridgeHealth, type HandInKind, type HandmadeMode, type JobView, type SkillMap, type SkillRole, type SkillUse,
 } from '../state/production';
 import { IconCheck, IconClose, IconPlus } from '../components/icons';
 import { ChoiceCheck, GuidedStepper, rise } from './ui';
@@ -13,6 +13,11 @@ import type { PageProps } from './pages';
 const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'Production is offline. Start the studio app with “npm run dev” on the computer that has Photoshop and Illustrator.' };
 const STATUS_LABEL: Record<JobView['status'], string> = { queued: 'Waiting', running: 'Drawing…', done: 'Finished', failed: 'Needs attention' };
 const ROLE_LABEL: Record<SkillRole, string> = { style: 'Art style', artwork: 'Artwork', general: 'General skill' };
+const HANDMADE_LABEL: Record<HandmadeMode, string> = {
+  draw: 'Hand-made — redrawn in Photoshop/Illustrator with manual tools (no AI image generation)',
+  strict: 'Hand-made — a designer draws it from the job sheet (no AI)',
+  agent: 'Hand-made — a designer draws it (AI-assisted element list)',
+};
 
 /** Jobs saved before per-job skills had a single "skill" and no file list. */
 const jobSkills = (j: JobView & { skill?: string }): SkillUse[] => j.skills ?? (j.skill ? [{ name: j.skill, role: 'style' }] : []);
@@ -400,8 +405,8 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
                 )}
                 {j.handmade && j.status === 'done' && <HandIn job={j} onHandIn={bridge.handIn} />}
                 <p className="job-meta">
-                  {j.handmade && <>Hand-made — a designer draws it{j.handmade === 'agent' ? ' (AI-assisted element list)' : ' (no AI)'} · </>}
-                  {jobSkills(j).length > 0 && <>{j.handmade ? 'Checklist from' : 'Drawn with'} {jobSkills(j).map((s, k) => <span key={s.name}>{k > 0 && ' + '}<code>{s.name}</code></span>)} · </>}
+                  {j.handmade && <>{HANDMADE_LABEL[j.handmade]} · </>}
+                  {jobSkills(j).length > 0 && <>{j.handmade && j.handmade !== 'draw' ? 'Checklist from' : 'Drawn with'} {jobSkills(j).map((s, k) => <span key={s.name}>{k > 0 && ' + '}<code>{s.name}</code></span>)} · </>}
                   job {j.id}
                 </p>
               </div>

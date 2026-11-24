@@ -20,8 +20,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import {
-  DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, SOURCE_FILES, applySkillChange, buildAgentPrompt, buildHandmadePrompt, handmadeJobSheet,
-  judgeHandIn, judgeHandmade, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
+  DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, REDRAW_BLOCKED_TOOLS, SOURCE_FILES, applySkillChange, buildAgentPrompt,
+  buildRedrawPrompt, handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
   type BridgeHealth, type DownloadFile, type HandInKind, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
 } from '../src/state/production';
 import {
@@ -32,10 +32,6 @@ const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const AGENT_TIMEOUT_MS = 45 * 60 * 1000;
 /** The agent can draw in the Adobe apps and read/write files — no shell, no network tools. */
 const ALLOWED_TOOLS = 'mcp__photoshop,mcp__illustrator,Skill,Read,Write,Edit,Glob,Grep';
-/** Hand-made jobs: the agent may only read and write the job sheet — no Adobe tools, so it cannot draw. */
-const HANDMADE_TOOLS = 'Skill,Read,Write,Glob,Grep';
-/** Anything in a hand-made job's output that would mean the agent made artwork. */
-const ARTWORK_FILE = /\.(psd|psb|ai|svg|png|jpe?g|webp|pdf|eps|tiff?)$/i;
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 const JOB_ID = /^[a-z0-9]{12}$/;
 const PLACEHOLDER_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
@@ -171,22 +167,14 @@ export function productionBridge(): Plugin {
     return 0;
   }
 
-  /** Demo runner for an agent-written hand-made job sheet. */
-  async function runMockHandmade(out: string): Promise<number> {
-    await new Promise((r) => setTimeout(r, 400));
-    await fs.writeFile(path.join(out, JOB_SHEET), '# Hand-made job sheet (demo)\n\nAI-assisted: demo runner placeholder. No artwork was made.\n');
-    await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({ ok: true, notes: 'Demo runner — placeholder job sheet.' }));
-    return 0;
-  }
-
   async function runJob(job: StoredJob): Promise<void> {
     const out = path.join(job.dir, 'output');
     await fs.mkdir(out, { recursive: true });
-    const handmade = job.handmade === 'agent';
-    const prompt = () => fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8');
+    // A hand-made redraw gets the same Adobe tools, minus the automatic ones (auto-trace, AI selection/remove/smoothing).
+    const args = ['-p', '--allowedTools', ALLOWED_TOOLS, ...(job.handmade === 'draw' ? ['--disallowedTools', REDRAW_BLOCKED_TOOLS.join(',')] : [])];
     const exitCode = runner === 'mock'
-      ? await (handmade ? runMockHandmade(out) : runMock(out))
-      : await runProcess(claudeBin, ['-p', '--allowedTools', handmade ? HANDMADE_TOOLS : ALLOWED_TOOLS], job.dir, await prompt(), AGENT_TIMEOUT_MS, path.join(job.dir, 'agent.log'));
+      ? await runMock(out)
+      : await runProcess(claudeBin, args, job.dir, await fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8'), AGENT_TIMEOUT_MS, path.join(job.dir, 'agent.log'));
 
     let notes: string | null = null;
     let reportedOk: boolean | null = null;
@@ -197,14 +185,6 @@ export function productionBridge(): Plugin {
     } catch {
       /* the agent did not write a result file */
     }
-    if (handmade) {
-      const made = (await fs.readdir(out).catch(() => [] as string[])).filter((f) => ARTWORK_FILE.test(f));
-      const hasSheet = await exists(path.join(out, JOB_SHEET));
-      const verdict = judgeHandmade({ hasSheet, madeArtwork: made.length > 0, reportedOk, notes, exitCode });
-      await update(job.id, { status: verdict.status, message: verdict.message, hasPreview: false, files: verdict.status === 'done' ? [JOB_SHEET] : [], layers: null });
-      return;
-    }
-
     const files: DownloadFile[] = [];
     for (const f of SOURCE_FILES) if (await exists(path.join(out, f))) files.push(f);
     const hasPsd = files.includes('artwork.psd');
@@ -264,9 +244,9 @@ export function productionBridge(): Plugin {
     const briefExcerpt = job.brief === '' && mode ? 'Exact copy of the client’s original' : job.brief.length > 140 ? `${job.brief.slice(0, 140)}…` : job.brief;
     const base = { id, dir, createdAt, styleName: job.styleName, skills: job.skills, ratio: job.ratio, templateTitle: job.templateTitle, briefExcerpt, runner, handmade: mode, layers: null, hasPreview: false };
 
-    // Strict hand-made: no agent at all. The sheet is built from the designer's notes and the skill's text.
+    // Hand-made "job sheet only": no agent at all. The sheet is built from the designer's notes and the hand-made skill's text.
     if (mode === 'strict') {
-      const skillName = job.skills[0]?.name ?? HAND_MADE_SKILL;
+      const skillName = HAND_MADE_SKILL;
       const sheet = handmadeJobSheet(job, { id, createdAt, skillName, skillText: await readSkillText(skillDirs(), skillName), referenceFile: reference ? `reference.${reference.ext}` : null });
       await fs.writeFile(path.join(dir, 'output', JOB_SHEET), sheet);
       const stored: StoredJob = { ...base, status: 'done', message: 'Job sheet ready. A designer draws this by hand — no AI was used for this job.', files: [JOB_SHEET] };
@@ -275,7 +255,7 @@ export function productionBridge(): Plugin {
       return stored;
     }
 
-    await fs.writeFile(path.join(dir, 'prompt.txt'), mode === 'agent' ? buildHandmadePrompt(job, dir) : buildAgentPrompt(job, dir));
+    await fs.writeFile(path.join(dir, 'prompt.txt'), mode === 'draw' ? buildRedrawPrompt(job, dir) : buildAgentPrompt(job, dir));
     const stored: StoredJob = { ...base, status: 'queued', message: runner === 'off' ? 'Saved. It will not start until a runner is available.' : null, files: [] };
     jobs.set(id, stored);
     await save(stored);

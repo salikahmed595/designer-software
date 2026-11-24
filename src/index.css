@@ -235,8 +235,8 @@ button.reference-box:hover { border-color: var(--accent); background: rgba(255, 
 .change-add { display: flex; gap: 8px; }
 .change-add .field { min-height: 44px; padding: 10px 12px; font-size: 15px; }
 .change-add .btn { flex-shrink: 0; }
-.ai-sheet { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; line-height: 1.5; }
-.ai-sheet input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); }
+.sheet-only { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; line-height: 1.5; }
+.sheet-only input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); }
 @media (max-width: 760px) {
   .change-grid { grid-template-columns: minmax(0, 1fr); }
 }

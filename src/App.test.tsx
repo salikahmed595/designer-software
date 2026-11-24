@@ -300,7 +300,7 @@ describe('finished artwork can be edited by the designer', () => {
   });
 });
 
-describe('Hand-made: the client’s own design, redrawn by a person with no AI', () => {
+describe('Hand-made: the client’s own design, redrawn in Photoshop and Illustrator', () => {
   const PNG_FILE = () => new File([new Uint8Array([137, 80, 78, 71])], 'machine-corps.png', { type: 'image/png' });
   const openHandmade = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(screen.getByRole('tab', { name: 'Hand-made' }));
@@ -309,19 +309,19 @@ describe('Hand-made: the client’s own design, redrawn by a person with no AI',
     expect(heading(/brief for hand-made emblem/i)).toBeInTheDocument();
   };
 
-  it('asks for the original instead of an art style, and says plainly that no AI draws it', async () => {
+  it('asks for the original instead of an art style, and says it is redrawn in Photoshop and Illustrator with no AI image generation', async () => {
     const { user, posted } = setup();
     await openHandmade(user);
     expect(screen.queryByRole('radiogroup', { name: 'Art style' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: 'Size' })).not.toBeInTheDocument();
-    expect(screen.getAllByText(/no ai draws any part of it/i).length).toBeGreaterThan(0);
-    expect(within(screen.getByRole('list', { name: 'Drawn with' })).getByText('hand-made')).toBeInTheDocument();
+    expect(screen.getByText(/redrawn in photoshop and illustrator/i, { selector: 'p.stage-sub' })).toHaveTextContent(/no ai image generation/i);
+    expect(within(screen.getByRole('list', { name: 'Drawn with' })).getByText(SHIPPED.defaultSkill)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /send to production/i }));
     expect(screen.getAllByRole('alert').map((a) => a.textContent)).toContain('Add the client’s original design — the image to redraw.');
     expect(posted).toHaveLength(0);
   });
 
-  it('the designer adds and removes changes, then sends a strict job with the original', async () => {
+  it('the designer adds and removes changes, then sends a Photoshop/Illustrator redraw with the original', async () => {
     const { user, posted } = setup();
     await openHandmade(user);
     expect(screen.getByText(/none — an exact copy/i)).toBeInTheDocument();
@@ -339,27 +339,43 @@ describe('Hand-made: the client’s own design, redrawn by a person with no AI',
     await user.click(screen.getByRole('button', { name: /send to production/i }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Jobs' })).toBeInTheDocument();
     expect(posted).toEqual([{
-      templateId: 'handmade-emblem', brief: '', handmadeMode: 'strict',
+      templateId: 'handmade-emblem', brief: '', handmadeMode: 'draw',
       changes: { add: ['A sixth star'], remove: ['The tagline'] },
       reference: { dataUrl: expect.stringMatching(/^data:image\/png;base64,/), role: 'Original to redraw' },
     }]);
   });
 
-  it('the agent may write the element list only when the designer ticks it, and that is marked AI-assisted', async () => {
+  it('“job sheet only” sends no work to the agent, for clients who allow no AI at all', async () => {
     const { user, posted } = setup();
     await openHandmade(user);
-    const tick = screen.getByRole('checkbox', { name: /let the agent write a detailed element list/i });
+    const tick = screen.getByRole('checkbox', { name: /job sheet only/i });
     expect(tick).not.toBeChecked();
     await user.click(tick);
-    expect(screen.getByText(/ai-assisted: the agent looks at the original/i)).toBeInTheDocument();
+    expect(screen.getByText(/no agent runs and no ai is used/i)).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Drawn with' })).getByText('hand-made')).toBeInTheDocument();
     await user.upload(screen.getByLabelText('Upload reference image'), PNG_FILE());
     await screen.findAllByText('machine-corps.png');
     await user.click(screen.getByRole('button', { name: /send to production/i }));
     await screen.findByRole('heading', { level: 1, name: 'Jobs' });
-    expect(posted[0]).toMatchObject({ handmadeMode: 'agent' });
+    expect(posted[0]).toMatchObject({ handmadeMode: 'sheet' });
   });
 
-  it('a finished hand-made job offers its job sheet, not artwork', async () => {
+  it('a finished redraw offers its layered files and says how it was made', async () => {
+    const drawn = {
+      id: 'eeeeeeeeeeee', createdAt: 5, status: 'done', styleName: 'Matches the original', ratio: 'Auto', templateTitle: 'Hand-made Emblem', briefExcerpt: 'Exact copy of the client’s original',
+      runner: 'claude', message: 'Redrawn.', hasPreview: true, files: ['artwork.psd', 'artwork.ai'], layers: 18,
+      skills: [{ name: SHIPPED.defaultSkill, role: 'general' }], handmade: 'draw',
+    };
+    const { user } = setup('claude', { jobs: [drawn] });
+    await openJobs(user);
+    const job = within(await screen.findByRole('list', { name: 'Jobs' })).getByRole('listitem');
+    expect(within(job).getByRole('link', { name: /download layered psd/i })).toHaveTextContent('18 layers');
+    expect(within(job).getByRole('link', { name: /download illustrator file/i })).toBeInTheDocument();
+    expect(job).toHaveTextContent(/redrawn in photoshop\/illustrator with manual tools \(no ai image generation\)/i);
+    expect(within(job).getByLabelText('Replace layered PSD')).toBeInTheDocument();
+  });
+
+  it('a finished “job sheet only” job offers its job sheet, not artwork', async () => {
     const sheetJob = {
       id: 'cccccccccccc', createdAt: 3, status: 'done', styleName: 'Matches the original', ratio: 'Auto', templateTitle: 'Hand-made Emblem', briefExcerpt: 'Exact copy of the client’s original',
       runner: 'claude', message: 'Job sheet ready. A designer draws this by hand — no AI was used for this job.', hasPreview: false, files: ['handmade-job-sheet.md'], layers: null,
@@ -422,12 +438,12 @@ describe('Hand-made: the client’s own design, redrawn by a person with no AI',
     });
   });
 
-  it('on the Skills screen, hand-made types fall back to the hand-made skill, not the default', async () => {
+  it('on the Skills screen, hand-made types are drawn by the default skill when they have none of their own', async () => {
     const { user } = setup();
     await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'Skills' }));
     await screen.findByRole('table', { name: 'Artwork types' });
     const pick = screen.getByRole('combobox', { name: 'Skill for Hand-made Logo' });
-    expect(within(pick).getAllByRole('option')[0]).toHaveTextContent('Hand-made skill (hand-made)');
+    expect(within(pick).getAllByRole('option')[0]).toHaveTextContent(`Default skill (${SHIPPED.defaultSkill})`);
   });
 });
 

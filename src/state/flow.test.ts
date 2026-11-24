@@ -30,7 +30,7 @@ describe('three-step flow: choose artwork → brief → jobs', () => {
     expect(s.page).toBe('brief');
     expect(s.brief).toEqual({
       templateId: 'esports-logo', artStyleId: 'flat-vector', prompt: 'neon wolf', displayName: 'NightWolf', referenceName: 'wolf.png', referenceRole: 'Style reference', ratio: 'Square',
-      changes: { add: [], remove: [] }, aiSheet: false,
+      changes: { add: [], remove: [] }, sheetOnly: false,
     });
     expect(s.referencePreview).toBe('data:x');
   });
@@ -72,19 +72,19 @@ describe('three-step flow: choose artwork → brief → jobs', () => {
       { type: 'addChange', list: 'add', text: '   ' },
       { type: 'addChange', list: 'remove', text: 'The small tagline' },
       { type: 'addChange', list: 'add', text: 'x'.repeat(500) },
-      { type: 'setAiSheet', on: true },
+      { type: 'setSheetOnly', on: true },
     ]);
     expect(s.brief.changes).toEqual({ add: ['A sixth star', 'x'.repeat(200)], remove: ['The small tagline'] });
-    expect(s.brief.aiSheet).toBe(true);
+    expect(s.brief.sheetOnly).toBe(true);
     s = run([{ type: 'removeChange', list: 'add', index: 0 }], s);
     expect(s.brief.changes.add).toEqual(['x'.repeat(200)]);
     for (let i = 0; i < 40; i++) s = run([{ type: 'addChange', list: 'remove', text: `item ${i}` }], s);
     expect(s.brief.changes.remove).toHaveLength(30);
     const back = hydrate(JSON.parse(serialize(s)));
     expect(back.brief.changes).toEqual(s.brief.changes);
-    expect(back.brief.aiSheet).toBe(true);
+    expect(back.brief.sheetOnly).toBe(true);
     expect(run([{ type: 'jobSent' }], s).brief.changes).toEqual({ add: [], remove: [] });
-    expect(hydrate({ brief: { changes: { add: [1, 'ok', 'y'.repeat(999)], remove: 'nope' }, aiSheet: 'yes' } }).brief).toMatchObject({ changes: { add: ['ok', 'y'.repeat(200)], remove: [] }, aiSheet: false });
+    expect(hydrate({ brief: { changes: { add: [1, 'ok', 'y'.repeat(999)], remove: 'nope' }, sheetOnly: 'yes', aiSheet: true } }).brief).toMatchObject({ changes: { add: ['ok', 'y'.repeat(200)], remove: [] }, sheetOnly: false });
   });
 
   it('header navigation works from anywhere', () => {

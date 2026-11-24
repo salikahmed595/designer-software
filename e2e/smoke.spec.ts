@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 
 // These tests run against the real dev server and its production bridge, with the demo runner
@@ -183,11 +185,8 @@ test('a designer adds their own skill, uses it for a style, and changes the defa
   expect(errors).toEqual([]);
 });
 
-test('hand-made: the original + the designer’s changes become a job sheet, with no agent and no artwork', async ({ page, isMobile }) => {
-  const errors: string[] = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  const extra = `Gold rim ${isMobile ? 'm' : 'd'} ${Date.now()}`;
-
+/** Opens the Hand-made Emblem brief, lists one change of each kind and adds the client's original. */
+async function fillHandmadeBrief(page: Page, extra: string) {
   await page.getByRole('tab', { name: 'Hand-made' }).click();
   await page.getByRole('list', { name: 'Artwork' }).getByRole('button').filter({ hasText: 'Hand-made Emblem' }).click();
   await expect(h1(page, /brief for hand-made emblem/i)).toBeVisible();
@@ -203,10 +202,47 @@ test('hand-made: the original + the designer’s changes become a job sheet, wit
   await page.getByRole('textbox', { name: 'Something to take out' }).press('Enter');
   await expect(page.getByRole('list', { name: 'Take out of the design' }).getByRole('listitem')).toHaveCount(1);
   await page.locator('input[type=file]').setInputFiles({ name: 'machine-corps.png', mimeType: 'image/png', buffer: PNG });
+}
+
+test('hand-made: by default the original is redrawn in Photoshop and Illustrator, as layered files', async ({ page, request, isMobile }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const extra = `Gold rim ${isMobile ? 'm' : 'd'} ${Date.now()}`;
+  await fillHandmadeBrief(page, extra);
+  await expect(page.locator('.stage-sub')).toContainText(/redrawn in photoshop and illustrator/i);
+  await expect(page.getByRole('checkbox', { name: /job sheet only/i })).not.toBeChecked();
   await page.getByRole('button', { name: /send to production/i }).click();
 
   await expect(h1(page, /^jobs$/i)).toBeVisible();
   const job = page.getByRole('list', { name: 'Jobs' }).getByRole('listitem').filter({ hasText: 'Hand-made Emblem' }).first();
+  await expect(job).toHaveAttribute('data-status', 'done', { timeout: 15000 });
+  await expect(job).toContainText(/redrawn in photoshop\/illustrator with manual tools/i);
+  await expect(job.getByRole('link', { name: /download layered psd/i })).toContainText('3 layers');
+  await expect(job.getByRole('link', { name: 'Download job sheet' })).toHaveCount(0);
+
+  // The agent got the redraw instructions: the drawing skill, the approved changes, no trace or generation.
+  const { jobs } = (await (await request.get('/api/production/jobs')).json()) as { jobs: { id: string; templateTitle: string; handmade?: string }[] };
+  const sent = jobs.find((j) => j.templateTitle === 'Hand-made Emblem' && j.handmade === 'draw')!;
+  const prompt = await readFile(path.join('test-results', 'production-jobs', sent.id, 'prompt.txt'), 'utf8');
+  expect(prompt).toMatch(/REDRAW the client’s existing design/);
+  expect(prompt).toMatch(/Image Trace/);
+  expect(prompt).not.toContain('"hand-made"');
+  const saved = JSON.parse(await readFile(path.join('test-results', 'production-jobs', sent.id, 'job.json'), 'utf8')) as { handmade: { mode: string; add: string[] } };
+  expect(saved.handmade).toMatchObject({ mode: 'draw', add: [extra] });
+  await noOverflow(page);
+  expect(errors).toEqual([]);
+});
+
+test('hand-made “job sheet only”: no agent, a job sheet, then the designer hands in what they drew', async ({ page, isMobile }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const extra = `Silver rim ${isMobile ? 'm' : 'd'} ${Date.now()}`;
+  await fillHandmadeBrief(page, extra);
+  await page.getByRole('checkbox', { name: /job sheet only/i }).check();
+  await page.getByRole('button', { name: /send to production/i }).click();
+
+  await expect(h1(page, /^jobs$/i)).toBeVisible();
+  const job = page.getByRole('list', { name: 'Jobs' }).getByRole('listitem').filter({ hasText: 'Hand-made Emblem' }).filter({ hasText: /job sheet/i }).first();
   await expect(job).toHaveAttribute('data-status', 'done');
   await expect(job).toContainText(/no ai was used/i);
   await expect(job.getByRole('link', { name: /psd|illustrator/i })).toHaveCount(0);
@@ -239,7 +275,7 @@ test('hand-made: the original + the designer’s changes become a job sheet, wit
 
 test('a hand-in is checked from its real bytes and only hand-made jobs take one', async ({ request }) => {
   const made = await request.post('/api/production/jobs', {
-    data: { templateId: 'handmade-logo', brief: '', handmadeMode: 'strict', changes: { add: [], remove: [] }, reference: { dataUrl: `data:image/png;base64,${PNG.toString('base64')}`, role: 'Original to redraw' } },
+    data: { templateId: 'handmade-logo', brief: '', handmadeMode: 'sheet', changes: { add: [], remove: [] }, reference: { dataUrl: `data:image/png;base64,${PNG.toString('base64')}`, role: 'Original to redraw' } },
   });
   expect(made.status()).toBe(201);
   const { job } = (await made.json()) as { job: { id: string } };

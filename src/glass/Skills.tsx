@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCategory, type CategoryId } from '../state/catalog';
 import {
-  ART_STYLES, MAX_SKILL_FILE_CHARS, parseSkillFile, referencedSkills, skillSlots, skillStatus,
+  ART_STYLES, HAND_MADE_SKILL, MAX_SKILL_FILE_CHARS, parseSkillFile, referencedSkills, skillSlots, skillStatus,
   type SkillChange, type SkillSlot, type SkillsState,
 } from '../state/production';
 import { TEMPLATES } from '../state/catalog';
@@ -60,9 +60,13 @@ export function useSkills(): SkillsApi {
 
 const DEFAULT_VALUE = '';
 
-/** Installed skills, plus the current one if it isn't installed (so the choice is never hidden). */
+/**
+ * Installed skills that can draw, plus the current one if it isn't installed (so the choice is never hidden).
+ * The hand-made skill is left out: it is a checklist for people and tells an agent not to draw.
+ */
 function skillOptions(installed: string[], current: string | null): string[] {
-  return current && !installed.includes(current) ? [...installed, current] : installed;
+  const drawing = installed.filter((name) => name !== HAND_MADE_SKILL);
+  return current && !drawing.includes(current) ? [...drawing, current] : drawing;
 }
 
 function SlotTable({ label, empty, slots, groupLabel, data, busy, onPick }: {
@@ -103,7 +107,7 @@ function SlotTable({ label, empty, slots, groupLabel, data, busy, onPick }: {
                           disabled={busy === `${s.kind}:${s.id}`}
                           onChange={(e) => onPick(s, e.target.value === DEFAULT_VALUE ? null : e.target.value)}
                         >
-                          <option value={DEFAULT_VALUE}>{s.fallback === data.map.defaultSkill ? `Default skill (${s.fallback})` : `Hand-made skill (${s.fallback})`}</option>
+                          <option value={DEFAULT_VALUE}>{`Default skill (${s.fallback})`}</option>
                           {skillOptions(installed, s.skill).map((name) => <option key={name} value={name}>{name}</option>)}
                         </select>
                         {missing && <span className="skill-status is-missing">Not installed</span>}

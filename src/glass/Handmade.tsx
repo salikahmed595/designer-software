@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { getTemplate } from '../state/catalog';
 import { MAX_BRIEF_CHARS, MAX_CHANGES, MAX_CHANGE_CHARS, type Changes, type FlowAction } from '../state/flow';
-import { NEED_ORIGINAL, productionIssues, skillsFor, type SkillMap } from '../state/production';
+import { HAND_MADE_SKILL, NEED_ORIGINAL, productionIssues, skillsFor, type SkillMap } from '../state/production';
 import { IconCheck, IconClose, IconPlus } from '../components/icons';
 import { GuidedStepper } from './ui';
 import { Thumb } from './Thumb';
@@ -63,8 +63,8 @@ function ChangeList({ list, title, inputLabel, button, placeholder, items, dispa
 }
 
 /**
- * Brief for a hand-made job: the client wants their own design, made by a person.
- * No art style or size — the original decides both. The designer lists any approved changes.
+ * Brief for a hand-made job: the client wants their own design recreated — redrawn in Photoshop and Illustrator
+ * (or, "job sheet only", by a designer). No art style or size — the original decides both. The designer lists any approved changes.
  */
 export function HandmadeBriefPage({ state, dispatch, onAddReference, bridge, skillMap }: PageProps & { bridge: Bridge; skillMap: SkillMap | null }) {
   const { brief } = state;
@@ -86,7 +86,7 @@ export function HandmadeBriefPage({ state, dispatch, onAddReference, bridge, ski
       await bridge.send({
         templateId: template.id,
         brief: brief.prompt,
-        handmadeMode: brief.aiSheet ? 'agent' : 'strict',
+        handmadeMode: brief.sheetOnly ? 'sheet' : 'draw',
         changes: brief.changes,
         reference: { dataUrl: state.referencePreview, role: 'Original to redraw' },
       });
@@ -104,8 +104,9 @@ export function HandmadeBriefPage({ state, dispatch, onAddReference, bridge, ski
     ['Original', hasOriginal, hasOriginal ? (brief.referenceName ?? '') : 'Not added yet'],
     ['Changes', true, noChanges ? 'Exact copy' : `${changeCount} approved`],
     ['Client notes', true, notesDone ? 'Written' : 'None (optional)'],
-    ['Job sheet', true, brief.aiSheet ? 'AI-assisted list' : 'No AI at all'],
+    ['Made in', true, brief.sheetOnly ? 'By a designer, from a job sheet' : 'Photoshop + Illustrator'],
   ];
+  const skills = brief.sheetOnly ? [{ name: HAND_MADE_SKILL, role: 'artwork' as const }] : skillMap ? skillsFor(skillMap, template.id, null) : null;
 
   return (
     <section className="stage">
@@ -113,7 +114,7 @@ export function HandmadeBriefPage({ state, dispatch, onAddReference, bridge, ski
       <div className="stage-head">
         <div>
           <h1 id="page-title" tabIndex={-1}>Brief for {template.title}</h1>
-          <p className="stage-sub">The client wants their own design, made by a person. No AI draws any part of it — the app prepares a job sheet and a designer redraws it by hand.</p>
+          <p className="stage-sub">The client’s own design, redrawn in Photoshop and Illustrator with their drawing tools — pen paths, shapes and live text, every part on its own layer. No AI image generation and no auto-trace.</p>
         </div>
         <button type="button" className="btn" onClick={() => dispatch({ type: 'back' })}><span aria-hidden>← </span>Change artwork</button>
       </div>
@@ -165,14 +166,14 @@ export function HandmadeBriefPage({ state, dispatch, onAddReference, bridge, ski
           </div>
 
           <div className="glass panel">
-            <label className="ai-sheet">
-              <input type="checkbox" checked={brief.aiSheet} onChange={(e) => dispatch({ type: 'setAiSheet', on: e.target.checked })} />
+            <label className="sheet-only">
+              <input type="checkbox" checked={brief.sheetOnly} onChange={(e) => dispatch({ type: 'setSheetOnly', on: e.target.checked })} />
               <span>
-                <strong className="block text-[15px]">Let the agent write a detailed element list</strong>
+                <strong className="block text-[15px]">Job sheet only — a designer draws it by hand</strong>
                 <span className="text-[14px] text-[var(--text-secondary)]">
-                  {brief.aiSheet
-                    ? 'AI-assisted: the agent looks at the original and lists every element for the designer. It never draws and has no Photoshop or Illustrator tools — but only use this if the client allows AI for planning, and tell them.'
-                    : 'Off: no AI is used for this job at all. The job sheet is made from the hand-made skill and your notes.'}
+                  {brief.sheetOnly
+                    ? 'No agent runs and no AI is used: the app makes a job sheet from the hand-made skill and your notes, and a designer redraws it. Use this when the client allows no AI at all.'
+                    : 'Off: the drawing agent redraws it in Photoshop and Illustrator with their drawing tools only — Image Trace, generative fill and AI selection are switched off.'}
                 </span>
               </span>
             </label>
@@ -198,13 +199,15 @@ export function HandmadeBriefPage({ state, dispatch, onAddReference, bridge, ski
             {error ? <span role="alert" className="field-error">{error}</span>
               : tried && issues.length > 0 ? <span className="field-error">{issues[0]}</span>
               : !online ? 'Production is offline, so nothing can be sent yet.'
-              : brief.aiSheet ? 'The agent writes the element list; then a designer draws it by hand.'
-              : 'The job sheet is ready straight away for the designer who draws it.'}
+              : brief.sheetOnly ? 'The job sheet is ready straight away for the designer who draws it.'
+              : 'The agent redraws it in Photoshop and Illustrator. The layered files appear in Jobs.'}
           </p>
-          {skillMap && (
+          {skills && (
             <DrawnWith
-              skills={skillsFor(skillMap, template.id, null)}
-              note="A designer draws it by hand, layer by layer, from the job sheet. The skill is the checklist they follow — it never draws."
+              skills={skills}
+              note={brief.sheetOnly
+                ? 'A designer draws it by hand from the job sheet. The hand-made skill is the checklist they follow.'
+                : 'You get layered Photoshop / Illustrator files: every part rebuilt on its own named layer, with live text. Only the approved changes differ from the original.'}
             />
           )}
           {bridge.health !== null && !online && <BridgeNote health={bridge.health} />}

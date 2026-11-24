@@ -35,8 +35,8 @@ export interface Brief {
   ratio: Ratio;
   /** hand-made only: approved differences from the original (empty = exact copy) */
   changes: Changes;
-  /** hand-made only: let the agent write a detailed element list (AI used for planning only) */
-  aiSheet: boolean;
+  /** hand-made only: a person draws it from a job sheet — no agent runs (default: redrawn in Photoshop/Illustrator) */
+  sheetOnly: boolean;
 }
 
 export interface FlowState {
@@ -63,7 +63,7 @@ export type FlowAction =
   | { type: 'setRatio'; ratio: Ratio }
   | { type: 'addChange'; list: keyof Changes; text: string }
   | { type: 'removeChange'; list: keyof Changes; index: number }
-  | { type: 'setAiSheet'; on: boolean }
+  | { type: 'setSheetOnly'; on: boolean }
   | { type: 'showErrors' }
   | { type: 'jobSent' }
   | { type: 'notify'; message: string }
@@ -71,7 +71,7 @@ export type FlowAction =
 
 const emptyBrief = (): Brief => ({
   templateId: null, artStyleId: null, prompt: '', displayName: '', referenceName: null, referenceRole: null, ratio: 'Auto',
-  changes: { add: [], remove: [] }, aiSheet: false,
+  changes: { add: [], remove: [] }, sheetOnly: false,
 });
 
 /** A clean change list from anything (typed text or stored data): trimmed, capped, no blanks. */
@@ -119,8 +119,8 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
     }
     case 'removeChange':
       return patch(state, { changes: { ...state.brief.changes, [action.list]: state.brief.changes[action.list].filter((_, i) => i !== action.index) } });
-    case 'setAiSheet':
-      return patch(state, { aiSheet: action.on });
+    case 'setSheetOnly':
+      return patch(state, { sheetOnly: action.on });
     case 'showErrors':
       return { ...state, showErrors: true };
     case 'jobSent':
@@ -157,7 +157,7 @@ export function hydrate(raw: unknown): FlowState {
         add: cleanChanges((b.changes as Record<string, unknown> | undefined)?.add),
         remove: cleanChanges((b.changes as Record<string, unknown> | undefined)?.remove),
       },
-      aiSheet: b.aiSheet === true,
+      sheetOnly: b.sheetOnly === true,
     },
   };
 }
