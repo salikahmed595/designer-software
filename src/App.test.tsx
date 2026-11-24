@@ -7,19 +7,22 @@ import { ART_STYLES } from './state/production';
 import { hasArt, indexThumbnails } from './glass/Thumb';
 
 type Runner = 'claude' | 'off';
+interface StubOptions { jobs?: unknown[]; statuses?: Record<string, string>; rejectPost?: string }
 
 /** Fake production bridge so no test ever starts a real agent. */
-function stubBridge(runner: Runner | 'offline' = 'claude') {
+function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {}) {
   const posted: unknown[] = [];
-  const jobs: unknown[] = [];
+  const jobs: unknown[] = [...(opts.jobs ?? [])];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (runner === 'offline') throw new Error('offline');
     const json = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as Response;
     if (url.endsWith('/health')) return json({ online: true, runner, detail: runner === 'claude' ? 'Connected: a Claude Code agent will draw.' : 'Claude Code was not found on this computer.' });
+    if (url.endsWith('/skills')) return json({ statuses: opts.statuses ?? {} });
     if (url.endsWith('/jobs') && init?.method === 'POST') {
+      if (opts.rejectPost) return json({ error: opts.rejectPost }, 409);
       const body = JSON.parse(String(init.body));
       posted.push(body);
-      jobs.unshift({ id: 'abc123abc123', createdAt: 1, status: 'queued', styleName: 'Cinematic PFP', skill: '2d-pfp', ratio: body.ratio, templateTitle: 'Gaming Avatar', briefExcerpt: body.brief, runner, message: null, hasPreview: false });
+      jobs.unshift({ id: 'abc123abc123', createdAt: 1, status: 'queued', styleName: 'Cinematic PFP', skills: [{ name: '2d-pfp', role: 'style' }], ratio: body.ratio, templateTitle: 'Gaming Avatar', briefExcerpt: body.brief, runner, message: null, hasPreview: false, files: [], layers: null });
       return json({ job: jobs[0] }, 201);
     }
     return json({ jobs });
@@ -30,8 +33,8 @@ function stubBridge(runner: Runner | 'offline' = 'claude') {
 beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.unstubAllGlobals());
 
-const setup = (runner: Runner | 'offline' = 'claude') => {
-  const bridge = stubBridge(runner);
+const setup = (runner: Runner | 'offline' = 'claude', opts: StubOptions = {}) => {
+  const bridge = stubBridge(runner, opts);
   const user = userEvent.setup();
   const view = render(<App />);
   return { user, ...bridge, ...view };
@@ -124,6 +127,40 @@ describe('step 2 — the brief', () => {
     expect(screen.getByText('2d-pfp')).toBeInTheDocument();
   });
 
+  it('shows which dedicated skills will draw it, and promises editable layered files', async () => {
+    const { user } = setup();
+    await openBrief(user);
+    const drawnWith = () => screen.getByRole('list', { name: 'Drawn with' });
+    expect(within(drawnWith()).getByText('2d-pfp')).toBeInTheDocument();
+    expect(drawnWith()).toHaveTextContent(/artwork/i);
+
+    await user.click(screen.getByRole('radio', { name: /vector artwork/i }));
+    expect(within(drawnWith()).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      expect.stringMatching(/art style.*2dvector-photoshop-illustrator-salik/i),
+      expect.stringMatching(/artwork.*2d-pfp/i),
+    ]);
+    expect(screen.getByText(/every part on its own named layer/i)).toBeInTheDocument();
+  });
+
+  it('says when a style has no dedicated skill yet and the general one is used', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('tab', { name: 'Streaming' }));
+    await user.click(within(artwork()).getByRole('button', { name: /stream overlay/i }));
+    await user.click(screen.getByRole('radio', { name: /^manga/i }));
+    expect(screen.getByRole('list', { name: 'Drawn with' })).toHaveTextContent(/general.*2d-artwork-photoshop-illustrator/i);
+  });
+
+  it('shows the bridge’s reason when a skill is missing, and keeps the brief', async () => {
+    const { user } = setup('claude', { rejectPost: 'The skill “anime-art” is not installed on this computer, so this can’t be drawn yet.' });
+    await openBrief(user);
+    await user.click(screen.getByRole('radio', { name: /cinematic pfp/i }));
+    await user.type(screen.getByLabelText(/paste the client’s brief/i), 'A wolf gamer');
+    await user.click(screen.getByRole('button', { name: /send to production/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/“anime-art” is not installed/);
+    expect(heading(/brief for gaming avatar/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/paste the client’s brief/i)).toHaveValue('A wolf gamer');
+  });
+
   it('explains what is missing instead of sending an incomplete job', async () => {
     const { user, posted } = setup();
     await openBrief(user);
@@ -187,5 +224,75 @@ describe('honest about production', () => {
     await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'Jobs' }));
     expect(heading(/^jobs$/i)).toBeInTheDocument();
     expect(screen.getByText(/no jobs yet/i)).toBeInTheDocument();
+  });
+});
+
+const openJobs = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'Jobs' }));
+  expect(heading(/^jobs$/i)).toBeInTheDocument();
+};
+
+describe('finished artwork can be edited by the designer', () => {
+  const done = {
+    id: 'aaaaaaaaaaaa', createdAt: 2, status: 'done', styleName: 'Vector Artwork', ratio: 'Square', templateTitle: 'VTuber Model Art', briefExcerpt: 'Fox girl',
+    runner: 'claude', message: 'Made it.', hasPreview: true, files: ['artwork.psd', 'artwork.ai'], layers: 42,
+    skills: [{ name: '2dvector-photoshop-illustrator-salik', role: 'style' }, { name: 'vtuber-master', role: 'artwork' }],
+  };
+
+  it('offers the layered PSD and AI as downloads, with the layer count and the skills used', async () => {
+    const { user } = setup('claude', { jobs: [done] });
+    await openJobs(user);
+    const job = within(await screen.findByRole('list', { name: 'Jobs' })).getByRole('listitem');
+    expect(within(job).getByRole('link', { name: /download layered psd/i })).toHaveAttribute('href', '/api/production/jobs/aaaaaaaaaaaa/files/artwork.psd');
+    expect(within(job).getByRole('link', { name: /download illustrator file/i })).toHaveAttribute('href', '/api/production/jobs/aaaaaaaaaaaa/files/artwork.ai');
+    expect(job).toHaveTextContent('42 layers');
+    expect(job).toHaveTextContent(/2dvector-photoshop-illustrator-salik.*vtuber-master/);
+  });
+
+  it('still shows jobs saved before per-job skills existed', async () => {
+    const old = { ...done, id: 'bbbbbbbbbbbb', skills: undefined, files: undefined, layers: undefined, skill: '2d-pfp' };
+    const { user } = setup('claude', { jobs: [old] });
+    await openJobs(user);
+    const job = within(await screen.findByRole('list', { name: 'Jobs' })).getByRole('listitem');
+    expect(job).toHaveTextContent('2d-pfp');
+    expect(within(job).queryByRole('link', { name: /download/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('skill setup (for the studio owner)', () => {
+  const openSkills = async (user: ReturnType<typeof userEvent.setup>) => {
+    await openJobs(user);
+    await user.click(screen.getByRole('button', { name: /skill setup/i }));
+    expect(heading(/^skill setup$/i)).toBeInTheDocument();
+  };
+
+  it('lists every art style and artwork type with the skill that draws it', async () => {
+    const { user } = setup('claude', { statuses: { '2d-pfp': 'installed', 'vtuber-master': 'installed', '2dvector-photoshop-illustrator-salik': 'installed', '2d-artwork-photoshop-illustrator': 'installed' } });
+    await openSkills(user);
+    const styles = screen.getByRole('table', { name: 'Art styles' });
+    expect(within(styles).getAllByRole('row')).toHaveLength(ART_STYLES.length + 1);
+    const pfp = within(styles).getByRole('row', { name: /cinematic pfp/i });
+    expect(pfp).toHaveTextContent('2d-pfp');
+    expect(await within(pfp).findByText(/installed/i)).toBeInTheDocument();
+    expect(within(styles).getByRole('row', { name: /^manga/i })).toHaveTextContent(/general skill/i);
+
+    const artworks = screen.getByRole('table', { name: 'Artwork types' });
+    expect(within(artworks).getAllByRole('row')).toHaveLength(TEMPLATES.length + 1);
+    expect(within(artworks).getByRole('row', { name: /vtuber model art/i })).toHaveTextContent('vtuber-master');
+    expect(screen.getByText(/production\/skills\.json/)).toBeInTheDocument();
+  });
+
+  it('warns about a skill that is not installed on this computer', async () => {
+    const { user } = setup('claude', { statuses: { '2d-pfp': 'missing' } });
+    await openSkills(user);
+    expect(await screen.findByText(/1 skill is not installed/i)).toBeInTheDocument();
+    const row = within(screen.getByRole('table', { name: 'Art styles' })).getByRole('row', { name: /cinematic pfp/i });
+    expect(within(row).getByText(/not installed/i)).toBeInTheDocument();
+  });
+
+  it('keeps the designer header to two destinations', async () => {
+    const { user } = setup();
+    await openSkills(user);
+    expect(within(screen.getByRole('navigation', { name: 'Primary' })).getAllByRole('button').map((b) => b.textContent)).toEqual(['New artwork', 'Jobs']);
   });
 });

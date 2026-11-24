@@ -3,10 +3,11 @@
  *   home  — choose the artwork
  *   brief — art style, client brief, reference, size → send
  *   jobs  — what the agent is drawing, and the finished artwork
+ * plus "skills" — which skill draws each style and artwork (for the studio owner, reached from Jobs)
  */
 import { getTemplate } from './catalog';
 
-export type Page = 'home' | 'brief' | 'jobs';
+export type Page = 'home' | 'brief' | 'jobs' | 'skills';
 
 export const REF_ROLES = ['Style reference', 'Character reference', 'Edit this image'] as const;
 export type RefRole = (typeof REF_ROLES)[number];
@@ -17,7 +18,7 @@ export const MAX_BRIEF_CHARS = 2000;
 
 export interface Brief {
   templateId: string | null;
-  /** id from production/styles.json */
+  /** id from production/skills.json */
   artStyleId: string | null;
   /** what the client asked for */
   prompt: string;
@@ -40,6 +41,7 @@ export interface FlowState {
 export type FlowAction =
   | { type: 'goHome' }
   | { type: 'openJobs' }
+  | { type: 'openSkills' }
   | { type: 'back' }
   | { type: 'pickTemplate'; templateId: string }
   | { type: 'setArtStyle'; artStyleId: string }
@@ -69,6 +71,8 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return { ...state, page: 'home', showErrors: false, notice: null };
     case 'openJobs':
       return { ...state, page: 'jobs', showErrors: false, notice: null };
+    case 'openSkills':
+      return { ...state, page: 'skills', showErrors: false, notice: null };
     case 'pickTemplate':
       return getTemplate(action.templateId) ? { ...patch(state, { templateId: action.templateId }), page: 'brief', showErrors: false, notice: null } : state;
     case 'setArtStyle':

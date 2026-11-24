@@ -32,11 +32,23 @@ npm run build
 
 1. The dev server's local bridge (`server/plugin.ts`) checks the request and writes `production/jobs/<id>/` with `job.json`, the reference image and `prompt.txt` (the agent's instructions).
 2. It starts a Claude Code agent in that folder, one job at a time. The agent may use only the `photoshop` and `illustrator` tool servers plus file tools — no command line.
-3. The agent loads the art style's skill, draws, and saves `output/artwork.psd` (+ `.ai`), `output/preview.png` and `output/result.json`. The Jobs screen shows the status, the preview and the notes.
+3. The agent loads the job's skills (see below), draws by hand — no AI image generation — and saves layered `output/artwork.psd` and/or `output/artwork.ai`, a flattened `output/preview.png` and `output/result.json`.
+4. The bridge checks the result before calling it finished: there must be a preview **and** a layered source file. It reads the layer count from `artwork.psd`; a flattened PSD (one layer) is marked "Needs attention", because designers must be able to edit every part.
+5. The Jobs screen shows the status, the skills used, the notes, and **Download layered PSD** / **Download Illustrator file** buttons.
 
 ### Adding your skills
 
-Edit `production/styles.json`. Put the exact skill name in a style's `"skill"`; `null` uses `"defaultSkill"`. A new style also needs a thumbnail drawing named `style-<id>` in `src/glass/Thumb.tsx` (a test fails if it is missing).
+Every art style and every artwork type has its own slot in `production/skills.json`:
+
+- `"styles"` — each style's `"skill"` decides **how it looks** (e.g. Anime → `anime-art`, Manga → `manga-effects`).
+- `"artworks"` — each artwork type's skill decides **what is delivered**: layout, sizes, parts (e.g. VTuber Model Art → `vtuber-master`).
+- `null` means the general skill (`"defaultSkill"`) is used until you add one.
+
+A job loads the style's skill first, then the artwork's skill (once, if they are the same). Use the skill's folder name from `~/.claude/skills/`. Save the file and the running app picks it up.
+
+**Skill setup** (Jobs → Skill setup) lists every slot, which skill it uses, and whether that skill is installed on this computer. A job whose skill is missing is refused with a clear message instead of failing later. Extra skill folders can be added with `LUMORA_SKILLS_DIRS` (separated by `;` on Windows). Plugin skills (`plugin:skill`) can't be checked and are shown as "Plugin skill".
+
+A new art style also needs a thumbnail named `style-<id>` in `thumbnails/` (a test fails if it is missing).
 
 ### Turning the agent on (studio admin)
 
@@ -51,19 +63,23 @@ Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests),
 ### Safety
 
 - The bridge runs with `npm run dev` only and accepts requests only from this computer.
-- The skill, canvas size and file names are decided on the server, never taken from the browser.
+- The skills, canvas size and file names are decided on the server, never taken from the browser.
+- Downloads serve only `artwork.psd` and `artwork.ai` from a job's `output/` folder — no other file or path.
 - The client's text stays in `job.json` as data; the agent is told to treat it as art direction only.
 - `production/jobs/` (client briefs and reference images) is never committed.
 
 ### Not verified yet
 
-A real end-to-end agent run. The tests use the demo runner.
+A real end-to-end agent run in Photoshop and Illustrator. The tests use the demo runner, which writes a placeholder preview and a skeleton 3-layer PSD that go through the same checks as a real job.
 
 ## Where things are
 
 - `src/state/catalog.ts` — categories, the 40 artwork types, search.
 - `src/state/flow.ts` — the three screens and the brief (pure reducer, saved on this device).
-- `src/state/production.ts` — art styles and skills, job validation, the agent's instructions.
+- `production/skills.json` — which skill draws each art style and artwork type.
+- `src/state/production.ts` — skill routing, job validation, the agent's instructions, judging the result.
+- `src/glass/Skills.tsx` — the Skill setup screen.
+- `server/files.ts` — PSD layer count, installed-skill lookup.
 - `src/glass/Thumb.tsx` — one drawn thumbnail per artwork type and per art style.
 - `src/glass/pages.tsx` (step 1), `src/glass/Produce.tsx` (steps 2 and 3), `src/glass/ui.tsx`, `src/index.css`.
 - `server/plugin.ts` — the local production bridge.

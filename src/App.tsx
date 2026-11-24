@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef } from 'react';
 import { GlassHeader } from './glass/ui';
 import { HomePage, type PageProps } from './glass/pages';
 import { BriefPage, JobsPage, useProductionBridge } from './glass/Produce';
+import { SkillsPage } from './glass/Skills';
 import { STORAGE_KEY, flowReducer, loadFlow, serialize } from './state/flow';
 
 const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp'];
@@ -68,6 +69,7 @@ export default function App() {
           {state.page === 'home' && <HomePage {...props} />}
           {state.page === 'brief' && <BriefPage {...props} bridge={bridge} />}
           {state.page === 'jobs' && <JobsPage {...props} bridge={bridge} />}
+          {state.page === 'skills' && <SkillsPage {...props} />}
         </div>
       </main>
 

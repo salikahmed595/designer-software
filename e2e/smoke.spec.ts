@@ -76,6 +76,16 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await expect(job).toContainText('Mascot Character');
   await expect(job).toHaveAttribute('data-status', 'done', { timeout: 15000 });
   await expect(job).toContainText(/no artwork was made/i);
+  await expect(job).toContainText('2d-artwork-photoshop-illustrator');
+
+  // The layered source is judged by the bridge (layer count read from the PSD) and can be downloaded.
+  const psd = job.getByRole('link', { name: /download layered psd/i });
+  await expect(psd).toContainText('3 layers');
+  const href = await psd.getAttribute('href');
+  const file = await page.request.get(href!);
+  expect(file.status()).toBe(200);
+  expect(file.headers()['content-disposition']).toMatch(/^attachment; filename="mascot-character-[a-z0-9]{12}\.psd"$/);
+  expect((await file.body()).subarray(0, 4).toString('latin1')).toBe('8BPS');
   await noOverflow(page);
 
   // The brief is cleared for the next client.
@@ -95,10 +105,42 @@ test('search finds artwork by the words people use', async ({ page }) => {
   await expect(page.getByRole('list', { name: 'Artwork' })).toBeVisible();
 });
 
+test('the brief shows the dedicated skills, and the owner can see every skill slot', async ({ page }) => {
+  await page.getByRole('tab', { name: 'Characters & VTubers' }).click();
+  await page.getByRole('list', { name: 'Artwork' }).getByRole('button').filter({ hasText: 'VTuber Model Art' }).click();
+  await page.getByRole('radio', { name: /^Vector Artwork/ }).click();
+  const drawnWith = page.getByRole('list', { name: 'Drawn with' });
+  await expect(drawnWith.getByRole('listitem')).toHaveText([/Art style\s*2dvector-photoshop-illustrator-salik/, /Artwork\s*vtuber-master/]);
+
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Jobs' }).click();
+  await page.getByRole('button', { name: 'Skill setup' }).click();
+  await expect(h1(page, /skill setup/i)).toBeVisible();
+  const styles = page.getByRole('table', { name: 'Art styles' });
+  await expect(styles.getByRole('row', { name: /Cinematic PFP/ })).toContainText('2d-pfp');
+  // Real check against this computer's installed skills — not a stub.
+  await expect(styles.getByRole('row', { name: /Cinematic PFP/ }).locator('.skill-status')).toHaveText(/Installed|Not installed/);
+  await expect(page.getByRole('table', { name: 'Artwork types' }).getByRole('row')).toHaveCount(41);
+  await noOverflow(page);
+});
+
 test('the production bridge refuses bad input and other websites', async ({ request }) => {
   const bad = await request.post('/api/production/jobs', { data: { styleId: '../../x', ratio: 'Square', brief: 'x' } });
   expect(bad.status()).toBe(400);
   const foreign = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: 'x' }, headers: { Origin: 'https://evil.example' } });
   expect(foreign.status()).toBe(403);
   expect((await request.get('/api/production/jobs/zzzzzzzzzzzz/preview')).status()).toBe(404);
+  expect((await request.get('/api/production/skills', { headers: { Origin: 'https://evil.example' } })).status()).toBe(403);
+});
+
+test('only the two layered source files can ever be downloaded', async ({ request }) => {
+  const made = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `download guard ${Date.now()}`, templateId: 'mascot' } });
+  expect(made.status()).toBe(201);
+  const { job } = (await made.json()) as { job: { id: string } };
+  await expect.poll(async () => ((await (await request.get('/api/production/jobs')).json()) as { jobs: { id: string; status: string }[] }).jobs.find((j) => j.id === job.id)?.status, { timeout: 15000 }).toBe('done');
+
+  expect((await request.get(`/api/production/jobs/${job.id}/files/artwork.psd`)).status()).toBe(200);
+  for (const evil of ['job.json', 'prompt.txt', 'result.json', '..%2Fjob.json', '..%2F..%2Fpackage.json', 'artwork.psd%00.png']) {
+    expect((await request.get(`/api/production/jobs/${job.id}/files/${evil}`)).status(), evil).toBe(404);
+  }
+  expect((await request.get('/api/production/jobs/zzzzzzzzzzzz/files/artwork.psd')).status()).toBe(404);
 });

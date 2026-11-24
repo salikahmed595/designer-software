@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getTemplate } from '../state/catalog';
 import { MAX_BRIEF_CHARS, MAX_TEXT, RATIOS, REF_ROLES } from '../state/flow';
-import { ART_STYLES, getArtStyle, productionIssues, ratioLabel, skillFor, type BridgeHealth, type JobView } from '../state/production';
+import {
+  ART_STYLES, getArtStyle, productionIssues, ratioLabel, skillsFor, type BridgeHealth, type JobView, type SkillRole, type SkillUse,
+} from '../state/production';
 import { IconCheck, IconClose, IconPlus } from '../components/icons';
 import { ChoiceCheck, GuidedStepper, rise } from './ui';
 import { Thumb } from './Thumb';
@@ -9,6 +11,29 @@ import type { PageProps } from './pages';
 
 const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'Production is offline. Start the studio app with “npm run dev” on the computer that has Photoshop and Illustrator.' };
 const STATUS_LABEL: Record<JobView['status'], string> = { queued: 'Waiting', running: 'Drawing…', done: 'Finished', failed: 'Needs attention' };
+const ROLE_LABEL: Record<SkillRole, string> = { style: 'Art style', artwork: 'Artwork', general: 'General skill' };
+
+/** Jobs saved before per-job skills had a single "skill" and no file list. */
+const jobSkills = (j: JobView & { skill?: string }): SkillUse[] => j.skills ?? (j.skill ? [{ name: j.skill, role: 'style' }] : []);
+
+/** Which skills will draw this job — so the designer can see the dedicated method is being used. */
+function DrawnWith({ skills }: { skills: SkillUse[] }) {
+  return (
+    <div className="drawn-with">
+      <p className="drawn-with-title">Drawn with</p>
+      <ul aria-label="Drawn with">
+        {skills.map((s) => (
+          <li key={s.name}>
+            <span className="drawn-role">{ROLE_LABEL[s.role]}</span>
+            <code>{s.name}</code>
+            {s.role === 'general' && <span className="drawn-hint">no dedicated skill yet</span>}
+          </li>
+        ))}
+      </ul>
+      <p className="drawn-with-note">You get layered Photoshop / Illustrator files, drawn by hand: every part on its own named layer and text you can still edit.</p>
+    </div>
+  );
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/production/${path}`, init);
@@ -259,7 +284,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge }: PageProps
               : canRun ? 'One job is drawn at a time. You can start the next brief straight away.'
               : 'The job will be saved, but it can’t start until the agent is available.'}
           </p>
-          {style && <p className="skill-line">Drawn with the <code>{skillFor(style.id)}</code> skill.</p>}
+          <DrawnWith skills={skillsFor(template.id, style?.id)} />
           {bridge.health !== null && !(online && bridge.health.runner === 'claude') && <BridgeNote health={bridge.health} />}
         </aside>
       </form>
@@ -277,7 +302,8 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
           <h1 id="page-title" tabIndex={-1}>Jobs</h1>
           <p className="stage-sub">Everything sent to production. Finished artwork appears here.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn" onClick={() => dispatch({ type: 'openSkills' })}>Skill setup</button>
           <button type="button" className="btn" onClick={() => void refresh()}>Refresh</button>
           <button type="button" className="btn btn-primary" onClick={() => dispatch({ type: 'goHome' })}><IconPlus width={16} height={16} /> New artwork</button>
         </div>
@@ -300,7 +326,22 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
                 <p className="mt-1 text-[14px] text-[var(--text-secondary)]">{j.styleName} · {j.ratio}</p>
                 <p className="job-brief">“{j.briefExcerpt}”</p>
                 {j.message && <p className={`job-message ${j.status === 'failed' ? 'is-failed' : ''}`}>{j.message}</p>}
-                <p className="job-meta">Skill <code>{j.skill}</code> · job {j.id}</p>
+                {j.status === 'done' && (j.files ?? []).length > 0 && (
+                  <div className="job-files">
+                    {j.files.includes('artwork.psd') && (
+                      <a className="btn btn-sm btn-primary" href={`/api/production/jobs/${j.id}/files/artwork.psd`} download>
+                        Download layered PSD{j.layers ? <span className="layer-count"> · {j.layers} layers</span> : null}
+                      </a>
+                    )}
+                    {j.files.includes('artwork.ai') && (
+                      <a className="btn btn-sm" href={`/api/production/jobs/${j.id}/files/artwork.ai`} download>Download Illustrator file</a>
+                    )}
+                  </div>
+                )}
+                <p className="job-meta">
+                  {jobSkills(j).length > 0 && <>Drawn with {jobSkills(j).map((s, k) => <span key={s.name}>{k > 0 && ' + '}<code>{s.name}</code></span>)} · </>}
+                  job {j.id}
+                </p>
               </div>
               {j.hasPreview && j.runner !== 'mock' && (
                 <img className="job-preview" src={`/api/production/jobs/${j.id}/preview`} alt={`Finished artwork: ${j.templateTitle ?? j.styleName}`} loading="lazy" />

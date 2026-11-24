@@ -1,5 +1,5 @@
 {
-  "_readme": "Art styles for the Brief screen. To connect one of your skills to a style, put the skill's exact name in \"skill\". A style with \"skill\": null uses \"defaultSkill\". Add a new style by adding an entry here (and a thumbnail drawing named style-<id> in src/glass/Thumb.tsx).",
+  "_readme": "Which skill draws what. Put a skill's exact folder name in a slot (for example \"anime-art\"); null means the general skill (defaultSkill) is used until you add one. A job loads the art style's skill (how it looks) AND the artwork's skill (what to deliver). Save the file and the app picks it up; the Skills screen (Jobs → Skill setup) shows every slot and warns if a skill is not installed. A new art style also needs a thumbnail named style-<id> in thumbnails/.",
   "defaultSkill": "2d-artwork-photoshop-illustrator",
   "styles": [
     { "id": "anime-cel", "name": "Anime", "category": "Character", "skill": null, "colors": ["#f08ad6", "#ffc9a8"], "description": "Clean lines with flat cel shading" },
@@ -18,5 +18,51 @@
     { "id": "sticker", "name": "Sticker", "category": "Vector", "skill": null, "colors": ["#ffa25c", "#ffe07a"], "description": "White border, big expression" },
     { "id": "comic-ink", "name": "Comic Ink", "category": "Illustration", "skill": null, "colors": ["#ffcf40", "#ff5a5a"], "description": "Heavy inks and halftone dots" },
     { "id": "line-art", "name": "Clean Line Art", "category": "Line Art", "skill": null, "colors": ["#e8eef0", "#9fb4c0"], "description": "Outlines only, ready to colour" }
-  ]
+  ],
+  "artworks": {
+    "stream-overlay": null,
+    "starting-soon": null,
+    "webcam-frame": null,
+    "brb-screen": null,
+    "stream-alert": null,
+    "stream-panels": null,
+    "offline-screen": null,
+    "full-stream-kit": null,
+
+    "server-icon": null,
+    "server-banner": null,
+    "profile-art": "2d-pfp",
+    "welcome-banner": null,
+    "invite-splash": null,
+    "role-icons": null,
+    "event-poster": null,
+    "bot-avatar": null,
+
+    "gaming-avatar": "2d-pfp",
+    "mascot": null,
+    "chibi-character": null,
+    "pngtuber": null,
+    "vtuber-art": "vtuber-master",
+    "anime-portrait": null,
+    "expression-sheet": null,
+    "character-sheet": null,
+
+    "static-emotes": null,
+    "chibi-emotes": null,
+    "discord-emojis": null,
+    "sub-badges": null,
+    "sticker-pack": null,
+    "rank-badges": null,
+    "point-icons": null,
+    "text-emotes": null,
+
+    "gaming-logo": null,
+    "esports-logo": null,
+    "youtube-thumbnail": null,
+    "youtube-banner": null,
+    "team-banner": null,
+    "tournament-poster": null,
+    "gaming-wallpaper": null,
+    "merch-art": null
+  }
 }

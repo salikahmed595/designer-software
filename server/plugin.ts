@@ -4,7 +4,9 @@
  *   POST /api/production/jobs          create a job → saved to <jobs>/<id>/, queued for the agent
  *   GET  /api/production/jobs          list jobs with status
  *   GET  /api/production/jobs/:id/preview   the exported preview.png
+ *   GET  /api/production/jobs/:id/files/artwork.psd|artwork.ai   the layered source, as a download
  *   GET  /api/production/health        which runner is active
+ *   GET  /api/production/skills        whether each skill named in production/skills.json is installed
  *
  * Runner (env LUMORA_RUNNER): "claude" starts a Claude Code agent that may use only the Photoshop and
  * Illustrator tools plus file tools; "mock" writes a placeholder (tests / demos); "off" only queues.
@@ -17,8 +19,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import {
-  buildAgentPrompt, validateJobRequest, type BridgeHealth, type JobStatus, type JobView, type ProductionJob, type RunnerKind,
+  SOURCE_FILES, buildAgentPrompt, judgeResult, referencedSkills, validateJobRequest,
+  type BridgeHealth, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillStatus, type SkillUse, type SourceFile,
 } from '../src/state/production';
+import { fakePsd, installedSkills, psdLayerCountOfFile, skillDirs } from './files';
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const AGENT_TIMEOUT_MS = 45 * 60 * 1000;
@@ -110,9 +114,15 @@ export function productionBridge(): Plugin {
     for (const id of await fs.readdir(jobsDir)) {
       if (!JOB_ID.test(id)) continue;
       try {
-        const view = JSON.parse(await fs.readFile(path.join(jobsDir, id, 'status.json'), 'utf8')) as JobView;
+        const saved = JSON.parse(await fs.readFile(path.join(jobsDir, id, 'status.json'), 'utf8')) as JobView & { skill?: string };
+        // Jobs saved before skills were per job had a single "skill" and no file list.
+        const { skill: oldSkill, ...view } = saved;
+        const skills: SkillUse[] = Array.isArray(view.skills) ? view.skills : oldSkill ? [{ name: oldSkill, role: 'style' }] : [];
         const interrupted = view.status === 'queued' || view.status === 'running';
-        jobs.set(id, { ...view, dir: path.join(jobsDir, id), ...(interrupted ? { status: 'failed' as JobStatus, message: 'Interrupted: the app was restarted before this job finished.' } : {}) });
+        jobs.set(id, {
+          ...view, skills, files: Array.isArray(view.files) ? view.files : [], layers: view.layers ?? null, dir: path.join(jobsDir, id),
+          ...(interrupted ? { status: 'failed' as JobStatus, message: 'Interrupted: the app was restarted before this job finished.' } : {}),
+        });
       } catch {
         /* not a job folder */
       }
@@ -142,18 +152,22 @@ export function productionBridge(): Plugin {
     await save(job).catch(() => undefined);
   };
 
+  /** Demo runner: a placeholder preview and a skeleton 3-layer PSD, judged exactly like a real job. */
+  async function runMock(out: string): Promise<number> {
+    await new Promise((r) => setTimeout(r, 700));
+    await fs.writeFile(path.join(out, 'preview.png'), PLACEHOLDER_PNG);
+    await fs.writeFile(path.join(out, 'artwork.psd'), fakePsd(3));
+    await fs.writeFile(path.join(out, 'result.json'), JSON.stringify({ ok: true, files: ['artwork.psd', 'preview.png'], notes: 'Demo runner — placeholder files. No artwork was made.' }));
+    return 0;
+  }
+
   async function runJob(job: StoredJob): Promise<void> {
     const out = path.join(job.dir, 'output');
     await fs.mkdir(out, { recursive: true });
-    if (runner === 'mock') {
-      await new Promise((r) => setTimeout(r, 700));
-      await fs.writeFile(path.join(out, 'preview.png'), PLACEHOLDER_PNG);
-      await update(job.id, { status: 'done', hasPreview: true, message: 'Demo runner — placeholder image. No artwork was made.' });
-      return;
-    }
-    const prompt = await fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8');
-    const code = await runProcess(claudeBin, ['-p', '--allowedTools', ALLOWED_TOOLS], job.dir, prompt, AGENT_TIMEOUT_MS, path.join(job.dir, 'agent.log'));
-    const hasPreview = await exists(path.join(out, 'preview.png'));
+    const exitCode = runner === 'mock'
+      ? await runMock(out)
+      : await runProcess(claudeBin, ['-p', '--allowedTools', ALLOWED_TOOLS], job.dir, await fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8'), AGENT_TIMEOUT_MS, path.join(job.dir, 'agent.log'));
+
     let notes: string | null = null;
     let reportedOk: boolean | null = null;
     try {
@@ -163,11 +177,21 @@ export function productionBridge(): Plugin {
     } catch {
       /* the agent did not write a result file */
     }
-    if (hasPreview && reportedOk !== false) await update(job.id, { status: 'done', hasPreview: true, message: notes });
-    else {
-      const why = notes ?? (code === null ? 'The agent could not be started or timed out.' : `The agent stopped (exit code ${code}) without exporting a preview. See agent.log in the job folder.`);
-      await update(job.id, { status: 'failed', hasPreview, message: why });
-    }
+    const files: SourceFile[] = [];
+    for (const f of SOURCE_FILES) if (await exists(path.join(out, f))) files.push(f);
+    const hasPsd = files.includes('artwork.psd');
+    const hasPreview = await exists(path.join(out, 'preview.png'));
+    const verdict = judgeResult({
+      hasPreview, hasPsd, hasAi: files.includes('artwork.ai'), psdLayers: hasPsd ? await psdLayerCountOfFile(path.join(out, 'artwork.psd')) : null,
+      reportedOk, notes, exitCode,
+    });
+    await update(job.id, { status: verdict.status, message: verdict.message, layers: verdict.layers, hasPreview, files });
+  }
+
+  /** Each skill named in skills.json → installed on this computer? Plugin skills ("plugin:skill") can't be checked. */
+  async function skillStatuses(): Promise<Record<string, SkillStatus>> {
+    const installed = await installedSkills(skillDirs());
+    return Object.fromEntries(referencedSkills().map((name) => [name, name.includes(':') ? 'unknown' : installed.has(name) ? 'installed' : 'missing']));
   }
 
   /** One job at a time: Photoshop and Illustrator are single shared apps. */
@@ -200,9 +224,9 @@ export function productionBridge(): Plugin {
     );
     await fs.writeFile(path.join(dir, 'prompt.txt'), buildAgentPrompt(job, dir));
     const stored: StoredJob = {
-      id, dir, createdAt: Date.now(), status: 'queued', styleName: job.styleName, skill: job.skill, ratio: job.ratio, templateTitle: job.templateTitle,
+      id, dir, createdAt: Date.now(), status: 'queued', styleName: job.styleName, skills: job.skills, ratio: job.ratio, templateTitle: job.templateTitle,
       briefExcerpt: job.brief.length > 140 ? `${job.brief.slice(0, 140)}…` : job.brief, runner,
-      message: runner === 'off' ? 'Saved. It will not start until a runner is available.' : null, hasPreview: false,
+      message: runner === 'off' ? 'Saved. It will not start until a runner is available.' : null, hasPreview: false, files: [], layers: null,
     };
     jobs.set(id, stored);
     await save(stored);
@@ -224,6 +248,9 @@ export function productionBridge(): Plugin {
       const health: BridgeHealth = { online: true, runner, detail };
       return send(res, 200, health);
     }
+    if (req.method === 'GET' && route === 'skills') {
+      return send(res, 200, { statuses: await skillStatuses() });
+    }
     if (req.method === 'GET' && route === 'jobs') {
       const list: JobView[] = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 30).map(({ dir: _dir, ...view }) => view);
       return send(res, 200, { jobs: list });
@@ -239,6 +266,14 @@ export function productionBridge(): Plugin {
       }
       const checked = validateJobRequest(body);
       if (!checked.ok) return send(res, 400, { error: checked.errors.join(' ') });
+      // A real agent can't draw with a skill that isn't installed — say so now instead of failing later.
+      if (runner === 'claude') {
+        const statuses = await skillStatuses();
+        const missing = checked.job.skills.filter((s) => statuses[s.name] === 'missing').map((s) => `“${s.name}”`);
+        if (missing.length > 0) {
+          return send(res, 409, { error: `The skill ${missing.join(' and ')} is not installed on this computer, so this can’t be drawn yet. Pick another style, or ask your studio admin to install it.` });
+        }
+      }
       const { dir: _dir, ...view } = await createJob(checked.job);
       return send(res, 201, { job: view });
     }
@@ -249,6 +284,22 @@ export function productionBridge(): Plugin {
       if (!file || !(await exists(file))) return send(res, 404, { error: 'No preview for this job.' });
       res.statusCode = 200;
       res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      createReadStream(file).pipe(res);
+      return;
+    }
+    // Only the two fixed source-file names can ever be served — no paths from the request reach the disk.
+    const download = /^jobs\/([a-z0-9]+)\/files\/([a-z.]+)$/.exec(route);
+    if (req.method === 'GET' && download && JOB_ID.test(download[1])) {
+      const name = SOURCE_FILES.find((f) => f === download[2]);
+      const job = jobs.get(download[1]);
+      const file = job && name ? path.join(job.dir, 'output', name) : null;
+      if (!file || !name || !(await exists(file))) return send(res, 404, { error: 'That file is not there.' });
+      const base = (job?.templateTitle ?? 'artwork').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'artwork';
+      res.statusCode = 200;
+      res.setHeader('Content-Type', name.endsWith('.psd') ? 'image/vnd.adobe.photoshop' : 'application/postscript');
+      res.setHeader('Content-Disposition', `attachment; filename="${base}-${download[1]}${path.extname(name)}"`);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       createReadStream(file).pipe(res);

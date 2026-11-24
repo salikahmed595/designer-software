@@ -25,8 +25,8 @@ export function GlassHeader({ page, activeJobs, onHome, onJobs }: HeaderProps) {
         <span className="brand-name">lumora<span className="text-[var(--accent)]">.</span></span>
       </button>
       <nav aria-label="Primary" className="flex items-center gap-1">
-        <button type="button" className="nav-btn" aria-current={page !== 'jobs' ? 'page' : undefined} onClick={onHome}>New artwork</button>
-        <button type="button" className="nav-btn" aria-current={page === 'jobs' ? 'page' : undefined} onClick={onJobs}>
+        <button type="button" className="nav-btn" aria-current={page === 'home' || page === 'brief' ? 'page' : undefined} onClick={onHome}>New artwork</button>
+        <button type="button" className="nav-btn" aria-current={page === 'jobs' || page === 'skills' ? 'page' : undefined} onClick={onJobs}>
           Jobs
           {activeJobs > 0 && <span className="count-badge" aria-label={`${activeJobs} in progress`}>{activeJobs}</span>}
         </button>
