@@ -322,6 +322,19 @@ describe('agent prompt', () => {
     expect(prompt).toContain('"layers"');
   });
 
+  it('may use free, licence-checked assets from the design-assets tools, saved in the job folder and listed in result.json', () => {
+    const prompt = promptFor({});
+    expect(prompt).toMatch(/design-assets tools/);
+    expect(prompt).toContain('D:/jobs/abc123/assets');
+    expect(prompt).toMatch(/icons_search.*fonts_search.*textures_search.*art_search/s);
+    expect(prompt).toMatch(/redraw|adapt/i);
+    expect(prompt).toMatch(/never paste a downloaded photo or artwork in as the finished artwork/i);
+    expect(prompt).toMatch(/credit_required.*never in a logo/i);
+    expect(prompt).toMatch(/logo.*draw the mark itself from scratch/i);
+    expect(prompt).toContain('"assets"');
+    expect(prompt).not.toMatch(/no stock images/);
+  });
+
   it('asks for the right source file for where the artwork is made', () => {
     expect(promptFor({ templateId: 'gaming-logo' })).toMatch(/artwork\.ai.*required/i);
     expect(promptFor({ templateId: 'youtube-thumbnail' })).toMatch(/artwork\.psd.*required/i);

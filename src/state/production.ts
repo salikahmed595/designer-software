@@ -424,9 +424,10 @@ export function buildAgentPrompt(job: ProductionJob, jobDir: string): string {
     job.reference
       ? `3. Look at the reference image ${dir}/reference.${job.reference.ext}. Its role is "${job.reference.role}".`
       : '3. There is no reference image for this job.',
-    `4. Draw the artwork at ${size} with the Photoshop and Illustrator tools, shape by shape and stroke by stroke. Use no AI image generation of any kind (no generative fill, no text-to-image) and no stock images.`,
+    `4. Draw the artwork at ${size} with the Photoshop and Illustrator tools, shape by shape and stroke by stroke. Use no AI image generation of any kind (no generative fill, no text-to-image).`,
+    `   Free assets, if they help: the design-assets tools (icons_search, fonts_search, textures_search, art_search, then the matching *_download with dest_dir ${dir}/assets) give licence-checked SVG icons, open fonts (fonts_install makes one usable for live text), CC0 textures and public-domain art. Adapt and restyle icons and textures as building blocks; use art only as study reference you redraw by hand — never paste a downloaded photo or artwork in as the finished artwork. Never use an item marked credit_required unless the brief allows a credit, and never in a logo. For a logo, draw the mark itself from scratch: free assets give no trademark rights and anyone may use the same icon, so use icons only as reference there.`,
     `5. Save the layered source files to ${dir}/output/: ${SOURCE_NOTE[job.madeIn ?? 'unknown']} Then export a flattened preview to ${dir}/output/preview.png.`,
-    `6. Finish by writing ${dir}/output/result.json: {"ok": true, "files": [...], "layers": ["top-level layer and group names, in order"], "notes": "what you made and any choices you had to make"} — or {"ok": false, "reason": "..."} if you could not finish.`,
+    `6. Finish by writing ${dir}/output/result.json: {"ok": true, "files": [...], "layers": ["top-level layer and group names, in order"], "assets": ["file names of downloaded assets you used (their credits are in assets/asset-credits.json)"], "notes": "what you made and any choices you had to make"} — or {"ok": false, "reason": "..."} if you could not finish.`,
     '',
     ...LAYER_RULES,
     '',

@@ -47,6 +47,24 @@ For a client who wants their **own design recreated**, not AI-generated. Pick **
 - **Skills:** hand-made types are not on the Skills screen, because no agent draws them. The `hand-made` skill (`~/.claude/skills/hand-made/SKILL.md`) is the checklist in the job sheet; it can't be picked as a drawing skill.
 - Older jobs made before this change (agent redraws) still show in Jobs with their files and a label saying how they were made.
 
+### Free assets (icons, fonts, textures, public-domain art)
+
+The drawing agent can use free, licence-checked assets through the **`design-assets`** connector (`mcp/design-assets/server.mjs`, no API keys). The studio registers it with Claude Code at startup, like the Adobe connectors. If that fails, jobs still run without it, and the Jobs screen shows the command to run.
+
+- **Icons:** Iconify, 200k+ SVGs. Only sets that allow paid client work and logos (MIT, ISC, Apache, BSD, CC0, OFL). CC BY sets only when asked for, and never in a logo.
+- **Fonts:** Fontsource, OFL/Apache only. `fonts_install` installs a font for the current Windows user, so Photoshop and Illustrator can use it for live text (they may need a restart).
+- **Textures:** Poly Haven, CC0 ("Powered by Poly Haven").
+- **Public-domain art reference:** Art Institute of Chicago.
+
+Rules:
+- Downloads go only into the job's `assets/` folder (or `Documents\Lumora-assets`) and are checked from their bytes.
+- Each download is credited in `asset-credits.json` next to it.
+- The agent lists the assets it used in `result.json`. It adapts icons and textures, redraws reference art by hand, and draws logo marks from scratch, because free licences give no trademark rights.
+
+Why these sites and not Pexels, Pixabay, Unsplash or Freepik, and what to add next: see [docs/asset-platforms.md](docs/asset-platforms.md).
+
+Tests: `npm run test:assets` (rules + live searches and downloads against the real sources).
+
 ### The Skills screen (add skills, default skill)
 
 Click **Skills** in the header. Everything is saved the moment you change it and is used for the next job; no restart is needed.

@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "typecheck": "tsc -b",
+    "test:assets": "node --test mcp/design-assets/lib.test.mjs mcp/design-assets/server.live.test.mjs",
     "thumbnails": "node scripts/make-thumbnails.mjs"
   },
   "dependencies": {

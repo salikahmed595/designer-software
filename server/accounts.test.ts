@@ -57,9 +57,10 @@ describe('agentArgs', () => {
 });
 
 describe('mcpServersFor / bareSkillNote', () => {
-  it('keeps only the photoshop and illustrator connectors', () => {
-    const text = JSON.stringify({ mcpServers: { photoshop: { type: 'stdio', command: 'ps.exe', args: ['mcp'] }, gmail: { command: 'x' }, illustrator: { command: 'ai.exe', args: [] } } });
-    expect(mcpServersFor(text)).toEqual({ mcpServers: { photoshop: { type: 'stdio', command: 'ps.exe', args: ['mcp'] }, illustrator: { command: 'ai.exe', args: [] } } });
+  it('keeps only the photoshop, illustrator and design-assets connectors', () => {
+    const assets = { command: 'node.exe', args: ['server.mjs', '--save-root', 'D:\jobs'] };
+    const text = JSON.stringify({ mcpServers: { photoshop: { type: 'stdio', command: 'ps.exe', args: ['mcp'] }, gmail: { command: 'x' }, illustrator: { command: 'ai.exe', args: [] }, 'design-assets': assets } });
+    expect(mcpServersFor(text)).toEqual({ mcpServers: { photoshop: { type: 'stdio', command: 'ps.exe', args: ['mcp'] }, illustrator: { command: 'ai.exe', args: [] }, 'design-assets': assets } });
     expect(mcpServersFor('{bad')).toEqual({ mcpServers: {} });
   });
 

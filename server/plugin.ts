@@ -23,6 +23,7 @@ import path from 'node:path';
 import type { Plugin } from 'vite';
 import { accountsSummary, agentAccounts, agentArgs, agentEnv, bareSkillNote, mcpServersFor, runWithFallback } from './accounts';
 import { ensureAdobe, readRegisteredServers, shellArg } from './adobe';
+import { ensureDesignAssets } from './assets';
 import {
   accountProblem, DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, SOURCE_FILES, applySkillChange, buildAgentPrompt,
   handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
@@ -35,7 +36,7 @@ import {
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const AGENT_TIMEOUT_MS = 45 * 60 * 1000;
 /** The agent can draw in the Adobe apps and read/write files — no shell, no network tools. */
-const ALLOWED_TOOLS = 'mcp__photoshop,mcp__illustrator,Skill,Read,Write,Edit,Glob,Grep';
+const ALLOWED_TOOLS = 'mcp__photoshop,mcp__illustrator,mcp__design-assets,Skill,Read,Write,Edit,Glob,Grep';
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 const JOB_ID = /^[a-z0-9]{12}$/;
 const PLACEHOLDER_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
@@ -164,7 +165,11 @@ export function productionBridge(): Plugin {
       const claudeJson = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => '');
       const adobe = await ensureAdobe({ claudeBin, roots: [os.homedir(), jobsDir], registered: readRegisteredServers(claudeJson) });
       runner = adobe.ok ? 'claude' : 'off';
-      detail = [adobe.detail, adobe.ok ? accountsSummary(agentAccounts(process.env)) : ''].filter(Boolean).join(' ');
+      // Free, licence-checked assets (icons, fonts, textures, public-domain art). Optional: drawing works without them.
+      const assets = await ensureDesignAssets({
+        claudeBin, claudeJson, nodeBin: process.execPath, serverFile: path.resolve('mcp/design-assets/server.mjs'), roots: [jobsDir, path.join(os.homedir(), 'Documents', 'Lumora-assets')],
+      });
+      detail = [adobe.detail, adobe.ok ? accountsSummary(agentAccounts(process.env)) : '', adobe.ok && !assets.ok ? assets.message : ''].filter(Boolean).join(' ');
     } else {
       detail = 'The drawing agent is not set up on this computer yet, so jobs are saved but cannot start. Ask your studio admin — the setup steps are in the README.';
     }
