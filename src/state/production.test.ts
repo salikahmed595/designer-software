@@ -1,57 +1,175 @@
 import { describe, it, expect } from 'vitest';
+import shipped from '../../production/skills.json';
 import { TEMPLATES } from './catalog';
 import {
-  ARTWORK_SKILLS, ART_STYLES, ART_STYLE_TABS, DEFAULT_SKILL, SKILL_NAME, buildAgentPrompt, canvasFor, filterArtStyles, getArtStyle,
-  judgeResult, productionIssues, referencedSkills, skillSlots, skillsFor, validateJobRequest,
+  ART_STYLES, ART_STYLE_TABS, BUILT_IN_DEFAULT_SKILL, SKILL_NAME, applySkillChange, buildAgentPrompt, canvasFor, filterArtStyles, getArtStyle,
+  judgeResult, normalizeSkillMap, parseSkillFile, productionIssues, referencedSkills, skillSlots, skillStatus, skillsFor, validateJobRequest,
 } from './production';
 
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';
 const good = { styleId: 'pfp-cinematic', ratio: 'Square', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: 'NightWolf', reference: { dataUrl: PNG, role: 'Style reference' } };
 
-describe('skill registry (production/skills.json)', () => {
-  it('has unique style ids and every skill name is well-formed', () => {
+/** The skill map the studio ships with. */
+const MAP = normalizeSkillMap(shipped)!;
+const INSTALLED = new Set(['2d-artwork-photoshop-illustrator', '2d-pfp', '2dvector-photoshop-illustrator-salik', 'vtuber-master', 'manga-effects']);
+
+describe('the shipped skill map (production/skills.json)', () => {
+  it('reads cleanly, with a slot for every style and every artwork type', () => {
+    expect(MAP).not.toBeNull();
+    expect(Object.keys(MAP.styles).sort()).toEqual(ART_STYLES.map((s) => s.id).sort());
+    expect(Object.keys(MAP.artworks).sort()).toEqual(TEMPLATES.map((t) => t.id).sort());
+    expect(MAP.defaultSkill).toBe(BUILT_IN_DEFAULT_SKILL);
+    for (const name of referencedSkills(MAP)) expect(name).toMatch(SKILL_NAME);
+  });
+
+  it('has unique style ids', () => {
     const ids = ART_STYLES.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.length).toBeGreaterThanOrEqual(8);
-    for (const name of referencedSkills()) expect(name).toMatch(SKILL_NAME);
     expect(getArtStyle('nope')).toBeUndefined();
   });
+});
 
-  it('has exactly one skill slot for every artwork type, so none can be forgotten', () => {
-    expect(Object.keys(ARTWORK_SKILLS).sort()).toEqual(TEMPLATES.map((t) => t.id).sort());
+describe('reading a skill map safely', () => {
+  it('fills missing slots with null and drops unknown ones', () => {
+    const m = normalizeSkillMap({ defaultSkill: 'house-style', styles: { manga: 'manga-effects', 'not-a-style': 'x' }, artworks: {} })!;
+    expect(m.defaultSkill).toBe('house-style');
+    expect(m.styles.manga).toBe('manga-effects');
+    expect(m.styles).not.toHaveProperty('not-a-style');
+    expect(m.styles['anime-cel']).toBeNull();
+    expect(Object.keys(m.artworks)).toHaveLength(TEMPLATES.length);
+  });
+
+  it('turns badly written skill names into empty slots', () => {
+    const m = normalizeSkillMap({ defaultSkill: 'ok', styles: { manga: '../../etc/passwd', chibi: 42 }, artworks: {} })!;
+    expect(m.styles.manga).toBeNull();
+    expect(m.styles.chibi).toBeNull();
+  });
+
+  it('refuses something that is not a skill map, or has no usable default', () => {
+    expect(normalizeSkillMap(null)).toBeNull();
+    expect(normalizeSkillMap('x')).toBeNull();
+    expect(normalizeSkillMap({ styles: {}, artworks: {} })).toBeNull();
+    expect(normalizeSkillMap({ defaultSkill: 'bad name!', styles: {}, artworks: {} })).toBeNull();
   });
 
   it('lists every slot for the Skills screen: all styles, then all artwork types', () => {
-    const slots = skillSlots();
+    const slots = skillSlots(MAP);
     expect(slots).toHaveLength(ART_STYLES.length + TEMPLATES.length);
     expect(slots.filter((s) => s.kind === 'style').map((s) => s.id)).toEqual(ART_STYLES.map((s) => s.id));
     expect(slots.find((s) => s.id === 'vtuber-art')).toMatchObject({ kind: 'artwork', label: 'VTuber Model Art', skill: 'vtuber-master' });
-    expect(referencedSkills()).toContain(DEFAULT_SKILL);
+    expect(referencedSkills(MAP)[0]).toBe(MAP.defaultSkill);
+  });
+
+  it('says whether a skill is on this computer', () => {
+    expect(skillStatus('2d-pfp', INSTALLED)).toBe('installed');
+    expect(skillStatus('anime-art', INSTALLED)).toBe('missing');
+    expect(skillStatus('design:design-critique', INSTALLED)).toBe('unknown');
   });
 });
 
 describe('which skills draw a job', () => {
   it('uses the style’s skill for the look and the artwork’s skill for the deliverable', () => {
-    expect(skillsFor('vtuber-art', 'flat-vector')).toEqual([
+    expect(skillsFor(MAP, 'vtuber-art', 'flat-vector')).toEqual([
       { name: '2dvector-photoshop-illustrator-salik', role: 'style' },
       { name: 'vtuber-master', role: 'artwork' },
     ]);
   });
 
   it('loads a skill once when the style and the artwork name the same one', () => {
-    expect(skillsFor('vtuber-art', 'vtuber-model')).toEqual([{ name: 'vtuber-master', role: 'style' }]);
+    expect(skillsFor(MAP, 'vtuber-art', 'vtuber-model')).toEqual([{ name: 'vtuber-master', role: 'style' }]);
   });
 
   it('uses only the dedicated skill that exists', () => {
-    expect(skillsFor('stream-overlay', 'pfp-cinematic')).toEqual([{ name: '2d-pfp', role: 'style' }]);
-    expect(skillsFor('vtuber-art', 'manga')).toEqual([{ name: 'vtuber-master', role: 'artwork' }]);
+    expect(skillsFor(MAP, 'stream-overlay', 'pfp-cinematic')).toEqual([{ name: '2d-pfp', role: 'style' }]);
+    expect(skillsFor(MAP, 'vtuber-art', 'manga')).toEqual([{ name: 'vtuber-master', role: 'artwork' }]);
   });
 
-  it('falls back to the general skill when neither has its own yet', () => {
-    expect(ART_STYLES.find((s) => s.id === 'manga')?.skill).toBeNull();
-    expect(ARTWORK_SKILLS['stream-overlay']).toBeNull();
-    expect(skillsFor('stream-overlay', 'manga')).toEqual([{ name: DEFAULT_SKILL, role: 'general' }]);
-    expect(skillsFor(null, null)).toEqual([{ name: DEFAULT_SKILL, role: 'general' }]);
+  it('falls back to the default skill when neither has its own yet — whichever default is chosen', () => {
+    expect(MAP.styles.manga).toBeNull();
+    expect(MAP.artworks['stream-overlay']).toBeNull();
+    expect(skillsFor(MAP, 'stream-overlay', 'manga')).toEqual([{ name: BUILT_IN_DEFAULT_SKILL, role: 'general' }]);
+    expect(skillsFor(MAP, null, null)).toEqual([{ name: BUILT_IN_DEFAULT_SKILL, role: 'general' }]);
+    expect(skillsFor({ ...MAP, defaultSkill: 'house-style' }, 'stream-overlay', 'manga')).toEqual([{ name: 'house-style', role: 'general' }]);
+  });
+});
+
+describe('changing which skill draws what (from the Skills screen)', () => {
+  const change = (raw: unknown) => applySkillChange(MAP, raw, INSTALLED);
+
+  it('gives a style or an artwork its own installed skill', () => {
+    const r = change({ kind: 'style', id: 'manga', skill: 'manga-effects' });
+    expect(r.ok && r.map.styles.manga).toBe('manga-effects');
+    const a = change({ kind: 'artwork', id: 'stream-overlay', skill: '2d-pfp' });
+    expect(a.ok && a.map.artworks['stream-overlay']).toBe('2d-pfp');
+  });
+
+  it('sets a slot back to the default skill with null', () => {
+    const r = change({ kind: 'style', id: 'pfp-cinematic', skill: null });
+    expect(r.ok && r.map.styles['pfp-cinematic']).toBeNull();
+  });
+
+  it('changes the default skill', () => {
+    const r = change({ kind: 'default', skill: 'manga-effects' });
+    expect(r.ok && r.map.defaultSkill).toBe('manga-effects');
+  });
+
+  it('never changes the map it was given', () => {
+    const before = JSON.stringify(MAP);
+    change({ kind: 'style', id: 'manga', skill: 'manga-effects' });
+    expect(JSON.stringify(MAP)).toBe(before);
+  });
+
+  it('refuses skills that are not installed, unknown slots, an empty default and junk', () => {
+    const bad: unknown[] = [
+      { kind: 'style', id: 'manga', skill: 'anime-art' },
+      { kind: 'style', id: 'nope', skill: '2d-pfp' },
+      { kind: 'artwork', id: 'nope', skill: '2d-pfp' },
+      { kind: 'default', skill: null },
+      { kind: 'default', skill: 'anime-art' },
+      { kind: 'style', id: 'manga', skill: '../x' },
+      { kind: 'other', id: 'manga', skill: '2d-pfp' },
+      null,
+      'x',
+    ];
+    for (const raw of bad) {
+      const r = change(raw);
+      expect(r.ok, JSON.stringify(raw)).toBe(false);
+      if (!r.ok) expect(r.error.length).toBeGreaterThan(5);
+    }
+  });
+});
+
+describe('reading a SKILL.md a designer adds', () => {
+  const file = (front: string, body = '# How to draw it\n') => `---\n${front}\n---\n\n${body}`;
+
+  it('reads the name and description from the top of the file', () => {
+    expect(parseSkillFile(file('name: manga-effects\ndescription: Black-and-white manga inks with screentone.'))).toEqual({
+      ok: true, name: 'manga-effects', description: 'Black-and-white manga inks with screentone.',
+    });
+    expect(parseSkillFile(file('name: "anime-art"\ndescription: >\n  Clean anime lines\n  with cel shading.')).ok).toBe(true);
+    expect(parseSkillFile(file('name: anime-art\ndescription: >\n  Clean anime lines\n  with cel shading.'))).toMatchObject({ description: 'Clean anime lines with cel shading.' });
+    expect(parseSkillFile(`﻿${file('name: x-1\ndescription: d')}`.replace(/\n/g, '\r\n'))).toMatchObject({ ok: true, name: 'x-1' });
+  });
+
+  it('explains in plain words what is wrong with a file', () => {
+    const cases: [string, RegExp][] = [
+      ['', /empty/i],
+      ['# just markdown', /starts with/i],
+      [file('description: d'), /name/i],
+      [file('name: Manga Effects\ndescription: d'), /lowercase/i],
+      [file('name: ../evil\ndescription: d'), /lowercase/i],
+      [file('name: plugin:thing\ndescription: d'), /lowercase/i],
+      [file('name: manga-effects'), /description/i],
+      ['---\nname: x\ndescription: d\n', /closing/i],
+      [file('name: x\ndescription: d', 'a'.repeat(300_000)), /too large/i],
+      [file('name: x\ndescription: d', 'bad\u0000byte'), /text file/i],
+    ];
+    for (const [text, why] of cases) {
+      const r = parseSkillFile(text);
+      expect(r.ok, text.slice(0, 40)).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(why);
+    }
   });
 
   it('filters by tab and search', () => {
@@ -79,7 +197,7 @@ describe('what the designer must provide', () => {
 
 describe('server-side job validation (never trusts the browser)', () => {
   it('accepts a good request and resolves the skills itself', () => {
-    const r = validateJobRequest({ ...good, skill: 'evil-skill', skills: [{ name: 'evil-skill', role: 'style' }] });
+    const r = validateJobRequest(MAP, { ...good, skill: 'evil-skill', skills: [{ name: 'evil-skill', role: 'style' }] });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.job).toMatchObject({ styleId: 'pfp-cinematic', skills: [{ name: '2d-pfp', role: 'style' }], ratio: 'Square', canvas: { width: 2000, height: 2000 }, templateId: 'gaming-avatar', templateTitle: 'Gaming Avatar', madeIn: 'Illustrator + Photoshop', text: 'NightWolf' });
@@ -89,23 +207,23 @@ describe('server-side job validation (never trusts the browser)', () => {
 
   it('rejects unknown styles, bad ratios, empty or oversized briefs and non-objects', () => {
     for (const bad of [null, 'x', { ...good, styleId: '../../etc' }, { ...good, ratio: '1:1' }, { ...good, brief: '   ' }, { ...good, brief: 'x'.repeat(2001) }]) {
-      expect(validateJobRequest(bad).ok).toBe(false);
+      expect(validateJobRequest(MAP, bad).ok).toBe(false);
     }
   });
 
   it('rejects unsafe references and drops unknown artwork types', () => {
-    expect(validateJobRequest({ ...good, reference: { dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=', role: 'Style reference' } }).ok).toBe(false);
-    expect(validateJobRequest({ ...good, reference: { dataUrl: 'data:text/html;base64,PGI+', role: 'Style reference' } }).ok).toBe(false);
-    expect(validateJobRequest({ ...good, reference: { dataUrl: PNG, role: 'Do anything' } }).ok).toBe(false);
-    expect(validateJobRequest({ ...good, reference: { dataUrl: `data:image/png;base64,${'A'.repeat(15_000_000)}`, role: 'Style reference' } }).ok).toBe(false);
-    const r = validateJobRequest({ ...good, templateId: 'not-real', reference: null });
+    expect(validateJobRequest(MAP, { ...good, reference: { dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=', role: 'Style reference' } }).ok).toBe(false);
+    expect(validateJobRequest(MAP, { ...good, reference: { dataUrl: 'data:text/html;base64,PGI+', role: 'Style reference' } }).ok).toBe(false);
+    expect(validateJobRequest(MAP, { ...good, reference: { dataUrl: PNG, role: 'Do anything' } }).ok).toBe(false);
+    expect(validateJobRequest(MAP, { ...good, reference: { dataUrl: `data:image/png;base64,${'A'.repeat(15_000_000)}`, role: 'Style reference' } }).ok).toBe(false);
+    const r = validateJobRequest(MAP, { ...good, templateId: 'not-real', reference: null });
     expect(r.ok && r.job.templateId).toBeNull();
   });
 });
 
 describe('agent prompt', () => {
   const promptFor = (over: Record<string, unknown>) => {
-    const r = validateJobRequest({ ...good, ...over });
+    const r = validateJobRequest(MAP, { ...good, ...over });
     if (!r.ok) throw new Error(r.errors.join(' '));
     return buildAgentPrompt(r.job, 'D:/jobs/abc123');
   };

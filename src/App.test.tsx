@@ -3,21 +3,50 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { CATEGORIES, HOME_POPULAR, TEMPLATES } from './state/catalog';
-import { ART_STYLES } from './state/production';
+import shipped from '../production/skills.json';
+import { ART_STYLES, applySkillChange, normalizeSkillMap, parseSkillFile, type InstalledSkill, type SkillMap } from './state/production';
 import { hasArt, indexThumbnails } from './glass/Thumb';
 
 type Runner = 'claude' | 'off';
-interface StubOptions { jobs?: unknown[]; statuses?: Record<string, string>; rejectPost?: string }
+interface StubOptions { jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string }
 
-/** Fake production bridge so no test ever starts a real agent. */
+const SHIPPED = normalizeSkillMap(shipped)!;
+const ALL_INSTALLED = ['2d-artwork-photoshop-illustrator', '2d-pfp', '2dvector-photoshop-illustrator-salik', 'vtuber-master'];
+
+/** Fake production bridge so no test ever starts a real agent. Skill changes go through the same rules as the real bridge. */
 function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {}) {
   const posted: unknown[] = [];
+  const skillCalls: { path: string; body: unknown }[] = [];
   const jobs: unknown[] = [...(opts.jobs ?? [])];
+  let map: SkillMap = structuredClone(SHIPPED);
+  const installed: InstalledSkill[] = (opts.installed ?? ALL_INSTALLED).map((name) => ({ name, description: `About ${name}` }));
+  const state = () => ({ map, installed, fileError: opts.fileError ?? null });
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (runner === 'offline') throw new Error('offline');
     const json = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as Response;
     if (url.endsWith('/health')) return json({ online: true, runner, detail: runner === 'claude' ? 'Connected: a Claude Code agent will draw.' : 'Claude Code was not found on this computer.' });
-    if (url.endsWith('/skills')) return json({ statuses: opts.statuses ?? {} });
+    if (url.endsWith('/skills')) return json(state());
+    if (url.endsWith('/skills/assign') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      skillCalls.push({ path: 'assign', body });
+      const r = applySkillChange(map, body, new Set(installed.map((s) => s.name)));
+      if (!r.ok) return json({ error: r.error }, 400);
+      map = r.map;
+      return json(state());
+    }
+    if (url.endsWith('/skills/add') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      skillCalls.push({ path: 'add', body });
+      const parsed = parseSkillFile(body.content);
+      if (!parsed.ok) return json({ error: parsed.error }, 400);
+      if (installed.some((s) => s.name === parsed.name)) return json({ error: `A skill called “${parsed.name}” is already installed.` }, 409);
+      installed.push({ name: parsed.name, description: parsed.description });
+      if (body.useFor) {
+        const r = applySkillChange(map, { ...body.useFor, skill: parsed.name }, new Set(installed.map((s) => s.name)));
+        if (r.ok) map = r.map;
+      }
+      return json({ ...state(), added: parsed.name }, 201);
+    }
     if (url.endsWith('/jobs') && init?.method === 'POST') {
       if (opts.rejectPost) return json({ error: opts.rejectPost }, 409);
       const body = JSON.parse(String(init.body));
@@ -27,7 +56,7 @@ function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {
     }
     return json({ jobs });
   }));
-  return { posted };
+  return { posted, skillCalls, currentMap: () => map };
 }
 
 beforeEach(() => window.localStorage.clear());
@@ -66,10 +95,10 @@ describe('thumbnails', () => {
 });
 
 describe('only what a designer needs', () => {
-  it('the header has two destinations and the old tools are gone', () => {
+  it('the header has three destinations and the old tools are gone', () => {
     setup();
     const nav = screen.getByRole('navigation', { name: 'Primary' });
-    expect(within(nav).getAllByRole('button').map((b) => b.textContent)).toEqual(['New artwork', 'Jobs']);
+    expect(within(nav).getAllByRole('button').map((b) => b.textContent)).toEqual(['New artwork', 'Jobs', 'Skills']);
     for (const gone of [/tools/i, /my projects/i, /find my artwork/i, /generate/i, /credits/i]) {
       expect(screen.queryByRole('button', { name: gone })).not.toBeInTheDocument();
       expect(screen.queryByText(gone)).not.toBeInTheDocument();
@@ -259,40 +288,133 @@ describe('finished artwork can be edited by the designer', () => {
   });
 });
 
-describe('skill setup (for the studio owner)', () => {
+describe('the Skills section (designers manage skills here)', () => {
   const openSkills = async (user: ReturnType<typeof userEvent.setup>) => {
-    await openJobs(user);
-    await user.click(screen.getByRole('button', { name: /skill setup/i }));
-    expect(heading(/^skill setup$/i)).toBeInTheDocument();
+    await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'Skills' }));
+    expect(heading(/^skills$/i)).toBeInTheDocument();
+    await screen.findByRole('table', { name: 'Art styles' });
   };
+  const styleRow = (name: RegExp) => within(screen.getByRole('table', { name: 'Art styles' })).getByRole('row', { name });
+  const MANGA_SKILL = '---\nname: manga-effects\ndescription: Black-and-white manga inks with screentone.\n---\n\n# Manga\n';
 
-  it('lists every art style and artwork type with the skill that draws it', async () => {
-    const { user } = setup('claude', { statuses: { '2d-pfp': 'installed', 'vtuber-master': 'installed', '2dvector-photoshop-illustrator-salik': 'installed', '2d-artwork-photoshop-illustrator': 'installed' } });
-    await openSkills(user);
-    const styles = screen.getByRole('table', { name: 'Art styles' });
-    expect(within(styles).getAllByRole('row')).toHaveLength(ART_STYLES.length + 1);
-    const pfp = within(styles).getByRole('row', { name: /cinematic pfp/i });
-    expect(pfp).toHaveTextContent('2d-pfp');
-    expect(await within(pfp).findByText(/installed/i)).toBeInTheDocument();
-    expect(within(styles).getByRole('row', { name: /^manga/i })).toHaveTextContent(/general skill/i);
-
-    const artworks = screen.getByRole('table', { name: 'Artwork types' });
-    expect(within(artworks).getAllByRole('row')).toHaveLength(TEMPLATES.length + 1);
-    expect(within(artworks).getByRole('row', { name: /vtuber model art/i })).toHaveTextContent('vtuber-master');
-    expect(screen.getByText(/production\/skills\.json/)).toBeInTheDocument();
-  });
-
-  it('warns about a skill that is not installed on this computer', async () => {
-    const { user } = setup('claude', { statuses: { '2d-pfp': 'missing' } });
-    await openSkills(user);
-    expect(await screen.findByText(/1 skill is not installed/i)).toBeInTheDocument();
-    const row = within(screen.getByRole('table', { name: 'Art styles' })).getByRole('row', { name: /cinematic pfp/i });
-    expect(within(row).getByText(/not installed/i)).toBeInTheDocument();
-  });
-
-  it('keeps the designer header to two destinations', async () => {
+  it('is one click from the header, and lists every style and artwork type with a skill picker', async () => {
     const { user } = setup();
     await openSkills(user);
-    expect(within(screen.getByRole('navigation', { name: 'Primary' })).getAllByRole('button').map((b) => b.textContent)).toEqual(['New artwork', 'Jobs']);
+    expect(within(screen.getByRole('table', { name: 'Art styles' })).getAllByRole('row')).toHaveLength(ART_STYLES.length + 1);
+    expect(within(screen.getByRole('table', { name: 'Artwork types' })).getAllByRole('row')).toHaveLength(TEMPLATES.length + 1);
+    expect(screen.getByRole('combobox', { name: 'Skill for Cinematic PFP' })).toHaveValue('2d-pfp');
+    expect(screen.getByRole('combobox', { name: 'Skill for Manga' })).toHaveValue('');
+    expect(screen.getByRole('combobox', { name: 'Skill for VTuber Model Art' })).toHaveValue('vtuber-master');
+    const options = within(screen.getByRole('combobox', { name: 'Skill for Manga' })).getAllByRole('option').map((o) => o.textContent);
+    expect(options[0]).toMatch(/default skill.*2d-artwork-photoshop-illustrator/i);
+    expect(options).toEqual(expect.arrayContaining(['2d-pfp', 'vtuber-master']));
+  });
+
+  it('shows and changes the default skill', async () => {
+    const { user, skillCalls, currentMap } = setup();
+    await openSkills(user);
+    const pick = screen.getByRole('combobox', { name: 'Default skill' });
+    expect(pick).toHaveValue('2d-artwork-photoshop-illustrator');
+    await user.selectOptions(pick, '2d-pfp');
+    expect(skillCalls).toEqual([{ path: 'assign', body: { kind: 'default', skill: '2d-pfp' } }]);
+    expect(await screen.findByText(/default skill is now 2d-pfp/i)).toBeInTheDocument();
+    expect(currentMap().defaultSkill).toBe('2d-pfp');
+    expect(within(screen.getByRole('combobox', { name: 'Skill for Manga' })).getAllByRole('option')[0]).toHaveTextContent(/default skill.*2d-pfp/i);
+  });
+
+  it('gives a style its own skill with one pick, and sets it back to the default', async () => {
+    const { user, skillCalls } = setup();
+    await openSkills(user);
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Skill for Manga' }), 'vtuber-master');
+    expect(await screen.findByText(/manga now uses vtuber-master/i)).toBeInTheDocument();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Skill for Cinematic PFP' }), '');
+    expect(await screen.findByText(/cinematic pfp now uses the default skill/i)).toBeInTheDocument();
+    expect(skillCalls.map((c) => c.body)).toEqual([
+      { kind: 'style', id: 'manga', skill: 'vtuber-master' },
+      { kind: 'style', id: 'pfp-cinematic', skill: null },
+    ]);
+  });
+
+  it('the brief uses the new choice straight away', async () => {
+    const { user } = setup();
+    await openSkills(user);
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Skill for Manga' }), 'vtuber-master');
+    await screen.findByText(/manga now uses vtuber-master/i);
+    await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'New artwork' }));
+    await user.click(screen.getByRole('tab', { name: 'Streaming' }));
+    await user.click(within(artwork()).getByRole('button', { name: /stream overlay/i }));
+    await user.click(screen.getByRole('radio', { name: /^manga/i }));
+    expect(screen.getByRole('list', { name: 'Drawn with' })).toHaveTextContent(/art style\s*vtuber-master/i);
+  });
+
+  it('finds a style or artwork by name', async () => {
+    const { user } = setup();
+    await openSkills(user);
+    await user.type(screen.getByRole('searchbox', { name: /find a style or artwork/i }), 'manga');
+    expect(within(screen.getByRole('table', { name: 'Art styles' })).getAllByRole('row')).toHaveLength(2);
+    expect(screen.queryByRole('table', { name: 'Artwork types' })).not.toBeInTheDocument();
+    expect(screen.getByText(/no artwork types match/i)).toBeInTheDocument();
+  });
+
+  it('adds a designer’s own skill from a SKILL.md file and uses it for a style right away', async () => {
+    const { user, skillCalls, currentMap } = setup();
+    await openSkills(user);
+    const add = screen.getByRole('region', { name: 'Add a skill' });
+    expect(within(add).getByRole('button', { name: /add skill/i })).toBeDisabled();
+    await user.upload(within(add).getByLabelText(/skill\.md file/i), new File([MANGA_SKILL], 'SKILL.md', { type: 'text/markdown' }));
+    expect(await within(add).findByText(/ready to add/i)).toHaveTextContent(/manga-effects/);
+    // the file's text also fills the paste box, so look for the description in the preview line
+    expect(within(add).getByText(/black-and-white manga inks/i, { selector: 'p' })).toBeInTheDocument();
+    expect(within(add).getByLabelText(/or paste/i)).toHaveValue(MANGA_SKILL);
+    await user.selectOptions(within(add).getByRole('combobox', { name: /use it for/i }), 'style:manga');
+    await user.click(within(add).getByRole('button', { name: /add skill/i }));
+
+    expect(await screen.findByText(/added “manga-effects”/i)).toBeInTheDocument();
+    expect(skillCalls).toEqual([{ path: 'add', body: { content: MANGA_SKILL, useFor: { kind: 'style', id: 'manga' } } }]);
+    expect(currentMap().styles.manga).toBe('manga-effects');
+    expect(screen.getByRole('combobox', { name: 'Skill for Manga' })).toHaveValue('manga-effects');
+    expect(within(screen.getByRole('combobox', { name: 'Skill for Chibi / Super Deformed' })).getByRole('option', { name: 'manga-effects' })).toBeInTheDocument();
+    expect(within(add).getByLabelText(/or paste/i)).toHaveValue('');
+  });
+
+  it('adds a pasted skill, and explains what is wrong with a bad one', async () => {
+    const { user } = setup();
+    await openSkills(user);
+    const add = screen.getByRole('region', { name: 'Add a skill' });
+    const box = within(add).getByLabelText(/or paste/i);
+    await user.click(box);
+    await user.paste('# just some notes');
+    expect(within(add).getByRole('alert')).toHaveTextContent(/starts with/i);
+    expect(within(add).getByRole('button', { name: /add skill/i })).toBeDisabled();
+
+    await user.clear(box);
+    await user.click(box);
+    await user.paste(MANGA_SKILL);
+    await user.click(within(add).getByRole('button', { name: /add skill/i }));
+    expect(await screen.findByText(/added “manga-effects”/i)).toBeInTheDocument();
+  });
+
+  it('refuses to add a skill whose name is already installed, and says why', async () => {
+    const { user } = setup();
+    await openSkills(user);
+    const add = screen.getByRole('region', { name: 'Add a skill' });
+    await user.click(within(add).getByLabelText(/or paste/i));
+    await user.paste(MANGA_SKILL.replace('manga-effects', '2d-pfp'));
+    await user.click(within(add).getByRole('button', { name: /add skill/i }));
+    expect(await within(add).findByRole('alert')).toHaveTextContent(/already installed/i);
+  });
+
+  it('warns about a skill that is not installed on this computer, without hiding the choice', async () => {
+    const { user } = setup('claude', { installed: ['2d-artwork-photoshop-illustrator', 'vtuber-master', '2dvector-photoshop-illustrator-salik'] });
+    await openSkills(user);
+    expect(screen.getByText(/1 skill is not installed on this computer: 2d-pfp/i)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Skill for Cinematic PFP' })).toHaveValue('2d-pfp');
+    expect(within(styleRow(/cinematic pfp/i)).getByText(/not installed/i)).toBeInTheDocument();
+  });
+
+  it('says plainly when the skills file had to be reset', async () => {
+    const { user } = setup('claude', { fileError: 'skills.json could not be read, so the built-in defaults are used.' });
+    await openSkills(user);
+    expect(screen.getByText(/could not be read/i)).toBeInTheDocument();
   });
 });

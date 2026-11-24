@@ -19,10 +19,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import {
-  SOURCE_FILES, buildAgentPrompt, judgeResult, referencedSkills, validateJobRequest,
-  type BridgeHealth, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillStatus, type SkillUse, type SourceFile,
+  SOURCE_FILES, applySkillChange, buildAgentPrompt, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
+  type BridgeHealth, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState, type SourceFile,
 } from '../src/state/production';
-import { fakePsd, installedSkills, psdLayerCountOfFile, skillDirs } from './files';
+import {
+  fakePsd, installSkill, listSkills, psdLayerCountOfFile, readSkillMap, skillDirs, skillInstallDir, writeSkillMap,
+} from './files';
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const AGENT_TIMEOUT_MS = 45 * 60 * 1000;
@@ -101,6 +103,8 @@ function runProcess(bin: string, args: string[], cwd: string, stdin: string | nu
 
 export function productionBridge(): Plugin {
   const jobsDir = path.resolve(process.env.LUMORA_JOBS_DIR ?? 'production/jobs');
+  /** Which skill draws what — written by the Skills screen. */
+  const skillsFile = path.resolve(process.env.LUMORA_SKILLS_FILE ?? 'production/skills.json');
   const claudeBin = process.env.LUMORA_CLAUDE_BIN?.trim() || 'claude';
   const jobs = new Map<string, StoredJob>();
   const queue: string[] = [];
@@ -188,10 +192,19 @@ export function productionBridge(): Plugin {
     await update(job.id, { status: verdict.status, message: verdict.message, layers: verdict.layers, hasPreview, files });
   }
 
-  /** Each skill named in skills.json → installed on this computer? Plugin skills ("plugin:skill") can't be checked. */
-  async function skillStatuses(): Promise<Record<string, SkillStatus>> {
-    const installed = await installedSkills(skillDirs());
-    return Object.fromEntries(referencedSkills().map((name) => [name, name.includes(':') ? 'unknown' : installed.has(name) ? 'installed' : 'missing']));
+  /* ---------- skills: read on every request so a change (in the app or by hand) applies to the next job ---------- */
+
+  async function skillsState(): Promise<SkillsState> {
+    const [{ map, error }, installed] = await Promise.all([readSkillMap(skillsFile), listSkills(skillDirs())]);
+    return { map, installed, fileError: error };
+  }
+
+  /** Changes to skills.json run one at a time, so two quick edits can't overwrite each other. */
+  let mapLock: Promise<unknown> = Promise.resolve();
+  function withMapLock<T>(work: () => Promise<T>): Promise<T> {
+    const run = mapLock.then(work, work);
+    mapLock = run.catch(() => undefined);
+    return run;
   }
 
   /** One job at a time: Photoshop and Illustrator are single shared apps. */
@@ -249,34 +262,76 @@ export function productionBridge(): Plugin {
       return send(res, 200, health);
     }
     if (req.method === 'GET' && route === 'skills') {
-      return send(res, 200, { statuses: await skillStatuses() });
+      return send(res, 200, await skillsState());
     }
     if (req.method === 'GET' && route === 'jobs') {
       const list: JobView[] = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 30).map(({ dir: _dir, ...view }) => view);
       return send(res, 200, { jobs: list });
     }
-    if (req.method === 'POST' && route === 'jobs') {
-      if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'Send JSON.' });
-      let body: unknown;
-      try {
-        body = await readJson(req);
-      } catch (e) {
-        const tooLarge = e instanceof Error && e.message === 'too-large';
-        return send(res, tooLarge ? 413 : 400, { error: tooLarge ? 'The request is too large.' : 'The request is not valid JSON.' });
-      }
-      const checked = validateJobRequest(body);
-      if (!checked.ok) return send(res, 400, { error: checked.errors.join(' ') });
-      // A real agent can't draw with a skill that isn't installed — say so now instead of failing later.
-      if (runner === 'claude') {
-        const statuses = await skillStatuses();
-        const missing = checked.job.skills.filter((s) => statuses[s.name] === 'missing').map((s) => `“${s.name}”`);
-        if (missing.length > 0) {
-          return send(res, 409, { error: `The skill ${missing.join(' and ')} is not installed on this computer, so this can’t be drawn yet. Pick another style, or ask your studio admin to install it.` });
-        }
-      }
-      const { dir: _dir, ...view } = await createJob(checked.job);
-      return send(res, 201, { job: view });
+
+    if (req.method !== 'POST' || !['jobs', 'skills/assign', 'skills/add'].includes(route)) return handleFiles(req, res, route);
+    // Every POST is JSON. Browsers can't send JSON to another site without asking first, which blocks other websites.
+    if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'Send JSON.' });
+    let body: unknown;
+    try {
+      body = await readJson(req);
+    } catch (e) {
+      const tooLarge = e instanceof Error && e.message === 'too-large';
+      return send(res, tooLarge ? 413 : 400, { error: tooLarge ? 'The request is too large.' : 'The request is not valid JSON.' });
     }
+
+    if (route === 'skills/assign') {
+      return withMapLock(async () => {
+        const { map, installed } = await skillsState();
+        const changed = applySkillChange(map, body, new Set(installed.map((s) => s.name)));
+        if (!changed.ok) return send(res, 400, { error: changed.error });
+        await writeSkillMap(skillsFile, changed.map);
+        send(res, 200, await skillsState());
+      });
+    }
+
+    if (route === 'skills/add') {
+      const b = (body ?? {}) as { content?: unknown; useFor?: unknown };
+      const parsed = typeof b.content === 'string' ? parseSkillFile(b.content) : { ok: false as const, error: 'Add the SKILL.md text.' };
+      if (!parsed.ok) return send(res, 400, { error: parsed.error });
+      return withMapLock(async () => {
+        const before = await skillsState();
+        if (before.installed.some((s) => s.name === parsed.name)) {
+          return send(res, 409, { error: `A skill called “${parsed.name}” is already installed. Pick it from the lists below, or change the name: line in the file.` });
+        }
+        try {
+          await installSkill(skillInstallDir(), parsed.name, b.content as string);
+        } catch (e) {
+          return send(res, 409, { error: e instanceof Error ? e.message : 'The skill could not be added.' });
+        }
+        let note: string | null = null;
+        if (b.useFor && typeof b.useFor === 'object') {
+          const after = await skillsState();
+          const changed = applySkillChange(after.map, { ...(b.useFor as object), skill: parsed.name }, new Set(after.installed.map((s) => s.name)));
+          if (changed.ok) await writeSkillMap(skillsFile, changed.map);
+          else note = `Added, but not assigned: ${changed.error}`;
+        }
+        send(res, 201, { ...(await skillsState()), added: parsed.name, note });
+      });
+    }
+
+    // POST jobs
+    const { map, installed } = await skillsState();
+    const checked = validateJobRequest(map, body);
+    if (!checked.ok) return send(res, 400, { error: checked.errors.join(' ') });
+    // A real agent can't draw with a skill that isn't installed — say so now instead of failing later.
+    if (runner === 'claude') {
+      const have = new Set(installed.map((s) => s.name));
+      const missing = checked.job.skills.filter((s) => skillStatus(s.name, have) === 'missing').map((s) => `“${s.name}”`);
+      if (missing.length > 0) {
+        return send(res, 409, { error: `The skill ${missing.join(' and ')} is not installed on this computer, so this can’t be drawn yet. Pick another one on the Skills screen.` });
+      }
+    }
+    const { dir: _dir, ...view } = await createJob(checked.job);
+    return send(res, 201, { job: view });
+  }
+
+  async function handleFiles(req: IncomingMessage, res: ServerResponse, route: string): Promise<void> {
     const preview = /^jobs\/([a-z0-9]+)\/preview$/.exec(route);
     if (req.method === 'GET' && preview && JOB_ID.test(preview[1])) {
       const job = jobs.get(preview[1]);

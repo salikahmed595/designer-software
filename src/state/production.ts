@@ -1,60 +1,170 @@
 /**
  * Production = "an agent draws this in Photoshop / Illustrator".
- * Shared by the browser (Production page) and the local bridge (server/plugin.ts).
- * Which skill draws what lives in production/skills.json, so skills can be added without code changes:
- * every art style and every artwork type has one slot.
+ * Shared by the browser and the local bridge (server/plugin.ts).
+ *
+ * Which skill draws what is a SkillMap: a default skill plus one slot per art style and per artwork type.
+ * It is live data — the bridge reads and writes production/skills.json, and designers change it on the
+ * Skills screen — so it is passed in rather than imported.
  */
-import registry from '../../production/skills.json';
 import { TEMPLATES, getTemplate, type MadeIn } from './catalog';
 import { RATIOS, REF_ROLES, type Ratio, type RefRole } from './flow';
+import { ART_STYLES, type ArtStyle } from './styles';
 
-export interface ArtStyle {
-  id: string;
-  name: string;
-  category: string;
-  /** exact skill name, or null = use the default skill until one is added */
-  skill: string | null;
-  colors: [string, string];
-  description: string;
-}
+export { ART_STYLES, type ArtStyle };
 
 /** A skill's folder name; plugin skills look like "plugin:skill". */
 export const SKILL_NAME = /^[a-z0-9][a-z0-9:_-]{0,80}$/i;
+/** Names a designer can give a new skill: lowercase words joined by hyphens. */
+export const NEW_SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export const MAX_SKILL_FILE_CHARS = 200_000;
 
-export const DEFAULT_SKILL: string = registry.defaultSkill;
-export const ART_STYLES: ArtStyle[] = registry.styles as ArtStyle[];
-/** artwork type id → its own skill, or null = none yet */
-export const ARTWORK_SKILLS: Record<string, string | null> = registry.artworks;
+/** Used when no skill map exists yet. */
+export const BUILT_IN_DEFAULT_SKILL = '2d-artwork-photoshop-illustrator';
+
 export const ART_STYLE_TABS: string[] = ['All', ...new Set(ART_STYLES.map((s) => s.category))];
-
 export const getArtStyle = (id: string | null | undefined): ArtStyle | undefined => ART_STYLES.find((s) => s.id === id);
 
-/** style = how it looks · artwork = what to deliver · general = the fallback when neither has its own skill */
+export interface SkillMap {
+  defaultSkill: string;
+  /** art style id → its own skill, or null = the default skill */
+  styles: Record<string, string | null>;
+  /** artwork type id → its own skill, or null = none */
+  artworks: Record<string, string | null>;
+}
+
+export interface InstalledSkill { name: string; description: string }
+
+/** What the Skills screen needs: the map, the skills on this computer, and any problem reading the file. */
+export interface SkillsState { map: SkillMap; installed: InstalledSkill[]; fileError: string | null }
+
+const slotValue = (v: unknown): string | null => (typeof v === 'string' && SKILL_NAME.test(v) ? v : null);
+
+/** Every slot empty, the built-in default skill. */
+export function defaultSkillMap(): SkillMap {
+  return {
+    defaultSkill: BUILT_IN_DEFAULT_SKILL,
+    styles: Object.fromEntries(ART_STYLES.map((s) => [s.id, null])),
+    artworks: Object.fromEntries(TEMPLATES.map((t) => [t.id, null])),
+  };
+}
+
+/**
+ * Builds a clean map from untrusted JSON: unknown slots are dropped, missing ones become null and
+ * badly written skill names become null. Returns null if it is not a usable map at all.
+ */
+export function normalizeSkillMap(raw: unknown): SkillMap | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const def = slotValue(r.defaultSkill);
+  if (!def) return null;
+  const pick = (from: unknown, ids: string[]) => {
+    const src = from && typeof from === 'object' ? (from as Record<string, unknown>) : {};
+    return Object.fromEntries(ids.map((id) => [id, slotValue(src[id])]));
+  };
+  return { defaultSkill: def, styles: pick(r.styles, ART_STYLES.map((s) => s.id)), artworks: pick(r.artworks, TEMPLATES.map((t) => t.id)) };
+}
+
+/** installed = found on this computer · missing = not found · unknown = can't be checked (plugin skills) */
+export type SkillStatus = 'installed' | 'missing' | 'unknown';
+export const skillStatus = (name: string, installed: Set<string>): SkillStatus =>
+  name.includes(':') ? 'unknown' : installed.has(name) ? 'installed' : 'missing';
+
+/** style = how it looks · artwork = what to deliver · general = the default, when neither has its own skill */
 export type SkillRole = 'style' | 'artwork' | 'general';
 export interface SkillUse { name: string; role: SkillRole }
 
 /** The skills that draw one job, in the order the agent loads them. */
-export function skillsFor(templateId: string | null | undefined, styleId: string | null | undefined): SkillUse[] {
+export function skillsFor(map: SkillMap, templateId: string | null | undefined, styleId: string | null | undefined): SkillUse[] {
   const uses: SkillUse[] = [];
-  const style = getArtStyle(styleId)?.skill;
-  const artwork = templateId ? ARTWORK_SKILLS[templateId] : null;
+  const style = styleId ? map.styles[styleId] : null;
+  const artwork = templateId ? map.artworks[templateId] : null;
   if (style) uses.push({ name: style, role: 'style' });
   if (artwork && artwork !== style) uses.push({ name: artwork, role: 'artwork' });
-  return uses.length > 0 ? uses : [{ name: DEFAULT_SKILL, role: 'general' }];
+  return uses.length > 0 ? uses : [{ name: map.defaultSkill, role: 'general' }];
 }
 
 export interface SkillSlot { kind: 'style' | 'artwork'; id: string; label: string; group: string; skill: string | null }
 
-/** Every slot in skills.json, for the Skills screen. */
-export function skillSlots(): SkillSlot[] {
+/** Every slot, for the Skills screen: all styles, then all artwork types. */
+export function skillSlots(map: SkillMap): SkillSlot[] {
   return [
-    ...ART_STYLES.map((s): SkillSlot => ({ kind: 'style', id: s.id, label: s.name, group: s.category, skill: s.skill })),
-    ...TEMPLATES.map((t): SkillSlot => ({ kind: 'artwork', id: t.id, label: t.title, group: t.categoryId, skill: ARTWORK_SKILLS[t.id] ?? null })),
+    ...ART_STYLES.map((s): SkillSlot => ({ kind: 'style', id: s.id, label: s.name, group: s.category, skill: map.styles[s.id] ?? null })),
+    ...TEMPLATES.map((t): SkillSlot => ({ kind: 'artwork', id: t.id, label: t.title, group: t.categoryId, skill: map.artworks[t.id] ?? null })),
   ];
 }
 
-/** Every distinct skill name the registry mentions, the general one first. */
-export const referencedSkills = (): string[] => [...new Set([DEFAULT_SKILL, ...skillSlots().flatMap((s) => (s.skill ? [s.skill] : []))])];
+/** Every distinct skill name the map uses, the default first. */
+export const referencedSkills = (map: SkillMap): string[] =>
+  [...new Set([map.defaultSkill, ...skillSlots(map).flatMap((s) => (s.skill ? [s.skill] : []))])];
+
+/* ---------- changing the map (Skills screen) ---------- */
+
+export type SkillChange = { kind: 'default'; skill: string } | { kind: 'style' | 'artwork'; id: string; skill: string | null };
+
+/**
+ * Applies one change from the Skills screen to a copy of the map. Only installed skills can be chosen
+ * (plugin skills can't be checked, so they are allowed), and the default can never be empty.
+ */
+export function applySkillChange(map: SkillMap, raw: unknown, installed: Set<string>): { ok: true; map: SkillMap } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object') return { ok: false, error: 'The change was not understood.' };
+  const r = raw as Record<string, unknown>;
+  const skill = r.skill;
+  const usable = (s: unknown): s is string => typeof s === 'string' && SKILL_NAME.test(s) && skillStatus(s, installed) !== 'missing';
+  if (skill !== null && !usable(skill)) {
+    return { ok: false, error: typeof skill === 'string' && SKILL_NAME.test(skill) ? `The skill “${skill}” is not installed on this computer.` : 'Choose a skill from the list.' };
+  }
+  if (r.kind === 'default') {
+    if (skill === null) return { ok: false, error: 'The default skill can’t be empty — choose one.' };
+    return { ok: true, map: { ...map, defaultSkill: skill } };
+  }
+  if (r.kind === 'style' || r.kind === 'artwork') {
+    const id = typeof r.id === 'string' ? r.id : '';
+    const known = r.kind === 'style' ? Boolean(getArtStyle(id)) : Boolean(getTemplate(id));
+    if (!known) return { ok: false, error: `Unknown ${r.kind === 'style' ? 'art style' : 'artwork type'}.` };
+    const key = r.kind === 'style' ? 'styles' : 'artworks';
+    return { ok: true, map: { ...map, [key]: { ...map[key], [id]: skill } } };
+  }
+  return { ok: false, error: 'The change was not understood.' };
+}
+
+/* ---------- reading a SKILL.md a designer adds ---------- */
+
+const unquote = (v: string) => v.trim().replace(/^(['"])(.*)\1$/, '$2').trim();
+
+/**
+ * Reads the name and description from the front matter of a SKILL.md, with plain-language errors.
+ * The file itself is stored as-is; this only checks it is a real skill file with a safe name.
+ */
+export function parseSkillFile(text: string): { ok: true; name: string; description: string } | { ok: false; error: string } {
+  if (text.length > MAX_SKILL_FILE_CHARS) return { ok: false, error: 'This file is too large for a skill (the limit is about 200 KB).' };
+  if (text.includes('\u0000')) return { ok: false, error: 'This is not a text file. Choose the skill’s SKILL.md.' };
+  const lines = text.replace(/^﻿/, '').replace(/\r\n?/g, '\n').split('\n');
+  if (lines.every((l) => l.trim() === '')) return { ok: false, error: 'The file is empty.' };
+  if (lines[0].trim() !== '---') return { ok: false, error: 'A SKILL.md starts with a line of three dashes (---), then name: and description: lines.' };
+  const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  if (end < 0) return { ok: false, error: 'The top section has no closing line of three dashes (---).' };
+  const front = lines.slice(1, end);
+
+  const field = (key: string): string | null => {
+    const i = front.findIndex((l) => new RegExp(`^${key}\\s*:`).test(l));
+    if (i < 0) return null;
+    const first = front[i].slice(front[i].indexOf(':') + 1).trim();
+    if (first !== '' && !/^[>|][-+]?$/.test(first)) return unquote(first);
+    const more: string[] = [];
+    for (const l of front.slice(i + 1)) {
+      if (!/^\s+\S/.test(l)) break;
+      more.push(l.trim());
+    }
+    return more.join(' ').trim();
+  };
+
+  const name = field('name');
+  if (!name) return { ok: false, error: 'Add a name line at the top, for example: name: manga-effects' };
+  if (!NEW_SKILL_NAME.test(name)) return { ok: false, error: `The name “${name.slice(0, 40)}” must be lowercase letters, numbers and hyphens only, for example: manga-effects` };
+  const description = field('description');
+  if (!description) return { ok: false, error: 'Add a description line at the top that says what the skill draws.' };
+  return { ok: true, name, description: description.slice(0, 400) };
+}
 
 export function filterArtStyles(query: string, tab: string): ArtStyle[] {
   const q = query.trim().toLowerCase();
@@ -132,9 +242,6 @@ export interface JobView {
 
 export interface BridgeHealth { online: boolean; runner: RunnerKind; detail: string }
 
-/** installed = found on this computer · missing = not found · unknown = can't be checked (plugin skills) */
-export type SkillStatus = 'installed' | 'missing' | 'unknown';
-
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
 const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
@@ -144,7 +251,7 @@ type Validation = { ok: true; job: ProductionJob } | { ok: false; errors: string
  * Validates an untrusted request body. The skill is always resolved here from the registry —
  * anything the browser sends about skills, paths or sizes is ignored.
  */
-export function validateJobRequest(raw: unknown): Validation {
+export function validateJobRequest(map: SkillMap, raw: unknown): Validation {
   if (!raw || typeof raw !== 'object') return { ok: false, errors: ['Request must be a JSON object.'] };
   const r = raw as Record<string, unknown>;
   const errors: string[] = [];
@@ -177,7 +284,7 @@ export function validateJobRequest(raw: unknown): Validation {
   return {
     ok: true,
     job: {
-      styleId: style.id, styleName: style.name, skills: skillsFor(template?.id, style.id), ratio, canvas: canvasFor(ratio), brief,
+      styleId: style.id, styleName: style.name, skills: skillsFor(map, template?.id, style.id), ratio, canvas: canvasFor(ratio), brief,
       templateId: template?.id ?? null, templateTitle: template?.title ?? null, madeIn: template?.madeIn ?? null, text, reference,
     },
   };

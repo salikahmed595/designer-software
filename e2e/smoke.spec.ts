@@ -28,7 +28,7 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
 
   // Step 1
   await expect(h1(page, /what does the client need/i)).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('button')).toHaveText(['New artwork', 'Jobs']);
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('button')).toHaveText(['New artwork', 'Jobs', 'Skills']);
   await expect(page.getByRole('tab', { name: /3D Artwork/ })).toBeDisabled();
   await thumbsHaveSize(page, '.artwork-card [data-thumb]', 60);
   await noOverflow(page);
@@ -105,22 +105,80 @@ test('search finds artwork by the words people use', async ({ page }) => {
   await expect(page.getByRole('list', { name: 'Artwork' })).toBeVisible();
 });
 
-test('the brief shows the dedicated skills, and the owner can see every skill slot', async ({ page }) => {
+test('the brief shows the dedicated skills for the chosen style and artwork', async ({ page }) => {
   await page.getByRole('tab', { name: 'Characters & VTubers' }).click();
   await page.getByRole('list', { name: 'Artwork' }).getByRole('button').filter({ hasText: 'VTuber Model Art' }).click();
   await page.getByRole('radio', { name: /^Vector Artwork/ }).click();
   const drawnWith = page.getByRole('list', { name: 'Drawn with' });
   await expect(drawnWith.getByRole('listitem')).toHaveText([/Art style\s*2dvector-photoshop-illustrator-salik/, /Artwork\s*vtuber-master/]);
+});
 
-  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Jobs' }).click();
-  await page.getByRole('button', { name: 'Skill setup' }).click();
-  await expect(h1(page, /skill setup/i)).toBeVisible();
-  const styles = page.getByRole('table', { name: 'Art styles' });
-  await expect(styles.getByRole('row', { name: /Cinematic PFP/ })).toContainText('2d-pfp');
-  // Real check against this computer's installed skills — not a stub.
-  await expect(styles.getByRole('row', { name: /Cinematic PFP/ }).locator('.skill-status')).toHaveText(/Installed|Not installed/);
+test('a designer adds their own skill, uses it for a style, and changes the default skill', async ({ page, isMobile }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const nav = page.getByRole('navigation', { name: 'Primary' });
+  const toast = page.locator('.toast');
+  const name = `e2e-${isMobile ? 'm' : 'd'}-${Date.now()}`;
+  const skillFile = `---\nname: ${name}\ndescription: Test pixel style made by the E2E run.\n---\n\n# Pixel\n`;
+
+  await nav.getByRole('button', { name: 'Skills' }).click();
+  await expect(h1(page, /^skills$/i)).toBeVisible();
   await expect(page.getByRole('table', { name: 'Artwork types' }).getByRole('row')).toHaveCount(41);
+  const defaultPick = page.getByRole('combobox', { name: 'Default skill' });
+  await expect(defaultPick).toHaveValue('2d-artwork-photoshop-illustrator');
   await noOverflow(page);
+
+  // Add: upload the SKILL.md, see what it is, say where to use it, add.
+  const add = page.getByRole('region', { name: 'Add a skill' });
+  await expect(add.getByRole('button', { name: 'Add skill' })).toBeDisabled();
+  await add.getByLabel(/skill\.md file/i).setInputFiles({ name: 'SKILL.md', mimeType: 'text/markdown', buffer: Buffer.from(skillFile) });
+  await expect(add.getByText(/ready to add/i)).toContainText(name);
+  await add.getByRole('combobox', { name: /use it for/i }).selectOption('style:pixel-art');
+  await add.getByRole('button', { name: 'Add skill' }).click();
+  await expect(toast).toContainText(`Added “${name}”`);
+  await expect(page.getByRole('combobox', { name: 'Skill for Pixel Art' })).toHaveValue(name);
+
+  // It really was installed and saved by the bridge (in the test's own folder).
+  const state = (await (await page.request.get('/api/production/skills')).json()) as { map: { styles: Record<string, string | null> }; installed: { name: string; description: string }[] };
+  expect(state.map.styles['pixel-art']).toBe(name);
+  expect(state.installed).toContainEqual({ name, description: 'Test pixel style made by the E2E run.' });
+
+  // The brief uses it straight away.
+  await nav.getByRole('button', { name: 'New artwork' }).click();
+  await page.getByRole('tab', { name: 'Streaming' }).click();
+  await page.getByRole('list', { name: 'Artwork' }).getByRole('button').filter({ hasText: 'Stream Overlay' }).click();
+  await page.getByRole('radio', { name: /^Pixel Art/ }).click();
+  await expect(page.getByRole('list', { name: 'Drawn with' })).toContainText(name);
+
+  // The default skill can be changed, and put back.
+  await nav.getByRole('button', { name: 'Skills' }).click();
+  await page.getByRole('combobox', { name: 'Default skill' }).selectOption(name);
+  await expect(toast).toContainText(`Default skill is now ${name}`);
+  await expect(page.getByRole('combobox', { name: 'Skill for Manga' }).locator('option').first()).toHaveText(`Default skill (${name})`);
+  await page.getByRole('combobox', { name: 'Default skill' }).selectOption('2d-artwork-photoshop-illustrator');
+  await expect(toast).toContainText('Default skill is now 2d-artwork-photoshop-illustrator');
+  await page.getByRole('combobox', { name: 'Skill for Pixel Art' }).selectOption('');
+  await expect(toast).toContainText('Pixel Art now uses the default skill');
+
+  // Adding the same name again is refused with a clear reason.
+  await add.getByLabel(/or paste/i).fill(skillFile);
+  await add.getByRole('button', { name: 'Add skill' }).click();
+  await expect(add.getByRole('alert')).toContainText(/already installed/i);
+  await noOverflow(page);
+  expect(errors).toEqual([]);
+});
+
+test('the skills API refuses bad input and other websites', async ({ request }) => {
+  const assign = (data: unknown, headers: Record<string, string> = {}) => request.post('/api/production/skills/assign', { data, headers });
+  expect((await assign({ kind: 'style', id: 'manga', skill: 'not-installed-anywhere-zz' })).status()).toBe(400);
+  expect((await assign({ kind: 'style', id: '../../x', skill: null })).status()).toBe(400);
+  expect((await assign({ kind: 'default', skill: null })).status()).toBe(400);
+  expect((await assign({ kind: 'style', id: 'manga', skill: null }, { Origin: 'https://evil.example' })).status()).toBe(403);
+  const add = (content: string) => request.post('/api/production/skills/add', { data: { content } });
+  expect((await add('---\nname: ../../evil\ndescription: x\n---\n')).status()).toBe(400);
+  expect((await add('no front matter')).status()).toBe(400);
+  const plain = await request.post('/api/production/skills/add', { data: '---\nname: x\n---', headers: { 'Content-Type': 'text/plain' } });
+  expect(plain.status()).toBe(415);
 });
 
 test('the production bridge refuses bad input and other websites', async ({ request }) => {

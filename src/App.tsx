@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef } from 'react';
 import { GlassHeader } from './glass/ui';
 import { HomePage, type PageProps } from './glass/pages';
 import { BriefPage, JobsPage, useProductionBridge } from './glass/Produce';
-import { SkillsPage } from './glass/Skills';
+import { SkillsPage, useSkills } from './glass/Skills';
 import { STORAGE_KEY, flowReducer, loadFlow, serialize } from './state/flow';
 
 const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp'];
@@ -19,6 +19,8 @@ const storage = (): Storage | undefined => {
 export default function App() {
   const [state, dispatch] = useReducer(flowReducer, undefined, () => loadFlow(storage()));
   const bridge = useProductionBridge();
+  // One copy of the skill map for the whole app, so a change on the Skills screen shows on the brief at once.
+  const skills = useSkills();
   const fileRef = useRef<HTMLInputElement>(null);
   const firstRender = useRef(true);
 
@@ -62,14 +64,14 @@ export default function App() {
   return (
     <div id="top" className="app-shell">
       <a href="#main" className="skip-link">Skip to content</a>
-      <GlassHeader page={state.page} activeJobs={bridge.activeJobs} onHome={() => dispatch({ type: 'goHome' })} onJobs={() => dispatch({ type: 'openJobs' })} />
+      <GlassHeader page={state.page} activeJobs={bridge.activeJobs} onHome={() => dispatch({ type: 'goHome' })} onJobs={() => dispatch({ type: 'openJobs' })} onSkills={() => dispatch({ type: 'openSkills' })} />
 
       <main id="main">
         <div key={`${state.page}-${state.brief.templateId ?? ''}`} className="page-enter">
           {state.page === 'home' && <HomePage {...props} />}
-          {state.page === 'brief' && <BriefPage {...props} bridge={bridge} />}
+          {state.page === 'brief' && <BriefPage {...props} bridge={bridge} skillMap={skills.data?.map ?? null} />}
           {state.page === 'jobs' && <JobsPage {...props} bridge={bridge} />}
-          {state.page === 'skills' && <SkillsPage {...props} />}
+          {state.page === 'skills' && <SkillsPage {...props} skills={skills} />}
         </div>
       </main>
 

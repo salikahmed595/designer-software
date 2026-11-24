@@ -36,17 +36,17 @@ npm run build
 4. The bridge checks the result before calling it finished: there must be a preview **and** a layered source file. It reads the layer count from `artwork.psd`; a flattened PSD (one layer) is marked "Needs attention", because designers must be able to edit every part.
 5. The Jobs screen shows the status, the skills used, the notes, and **Download layered PSD** / **Download Illustrator file** buttons.
 
-### Adding your skills
+### The Skills screen (add skills, default skill)
 
-Every art style and every artwork type has its own slot in `production/skills.json`:
+Click **Skills** in the header. Everything is saved the moment you change it and is used for the next job; no restart is needed.
 
-- `"styles"` — each style's `"skill"` decides **how it looks** (e.g. Anime → `anime-art`, Manga → `manga-effects`).
-- `"artworks"` — each artwork type's skill decides **what is delivered**: layout, sizes, parts (e.g. VTuber Model Art → `vtuber-master`).
-- `null` means the general skill (`"defaultSkill"`) is used until you add one.
+- **Default skill**: draws every art style and artwork type that has no skill of its own. Pick it from the list. It can't be left empty.
+- **Add a skill**: choose a `SKILL.md` file or paste its text. The screen shows the skill's name and description, or says in plain words what is wrong (for example a missing `name:` line). Optionally pick where to use it straight away (an art style, an artwork type or the default), then press **Add skill**. It is installed as `~/.claude/skills/<name>/SKILL.md`. An existing skill is never overwritten; a name that is already taken is refused.
+- **Art styles / Artwork types**: one picker per row. A style's skill decides **how it looks** (Manga → `manga-effects`). An artwork type's skill decides **what is delivered**: layout, sizes, parts (VTuber Model Art → `vtuber-master`). "Default skill" means the default is used. Use the search box to find a row.
 
-A job loads the style's skill first, then the artwork's skill (once, if they are the same). Use the skill's folder name from `~/.claude/skills/`. Save the file and the running app picks it up.
+A job loads the style's skill first, then the artwork's skill (once, if they are the same). A skill that is chosen but not installed on this computer is marked **Not installed**, and a job that needs it is refused with a clear message instead of failing later.
 
-**Skill setup** (Jobs → Skill setup) lists every slot, which skill it uses, and whether that skill is installed on this computer. A job whose skill is missing is refused with a clear message instead of failing later. Extra skill folders can be added with `LUMORA_SKILLS_DIRS` (separated by `;` on Windows). Plugin skills (`plugin:skill`) can't be checked and are shown as "Plugin skill".
+The choices are stored in `production/skills.json` (`defaultSkill`, `styles`, `artworks`; `null` = default). You can edit it by hand too. If the file is broken, the screen says so, and the next save keeps the old file aside as `skills.json.broken-<time>`. Switches: `LUMORA_SKILLS_FILE` (another map file), `LUMORA_SKILLS_INSTALL_DIR` (where added skills go), `LUMORA_SKILLS_DIRS` (extra folders to look in, separated by `;` on Windows). Plugin skills (`plugin:skill`) can't be checked, so they are never marked missing.
 
 A new art style also needs a thumbnail named `style-<id>` in `thumbnails/` (a test fails if it is missing).
 
@@ -64,6 +64,8 @@ Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests),
 
 - The bridge runs with `npm run dev` only and accepts requests only from this computer.
 - The skills, canvas size and file names are decided on the server, never taken from the browser.
+- An added skill's name must be lowercase letters, numbers and hyphens, so it can't point outside the skills folder; files are capped at about 200 KB and never overwrite an existing skill.
+- The E2E tests use their own temporary copy of the skill map and their own install folder, so they never change your real skills.
 - Downloads serve only `artwork.psd` and `artwork.ai` from a job's `output/` folder — no other file or path.
 - The client's text stays in `job.json` as data; the agent is told to treat it as art direction only.
 - `production/jobs/` (client briefs and reference images) is never committed.
@@ -78,8 +80,9 @@ A real end-to-end agent run in Photoshop and Illustrator. The tests use the demo
 - `src/state/flow.ts` — the three screens and the brief (pure reducer, saved on this device).
 - `production/skills.json` — which skill draws each art style and artwork type.
 - `src/state/production.ts` — skill routing, job validation, the agent's instructions, judging the result.
-- `src/glass/Skills.tsx` — the Skill setup screen.
-- `server/files.ts` — PSD layer count, installed-skill lookup.
+- `src/state/styles.ts` — the art styles.
+- `src/glass/Skills.tsx` — the Skills screen (default skill, add a skill, per-style and per-artwork pickers).
+- `server/files.ts` — PSD layer count, listing and installing skills, reading and saving the skill map.
 - `src/glass/Thumb.tsx` — one drawn thumbnail per artwork type and per art style.
 - `src/glass/pages.tsx` (step 1), `src/glass/Produce.tsx` (steps 2 and 3), `src/glass/ui.tsx`, `src/index.css`.
 - `server/plugin.ts` — the local production bridge.

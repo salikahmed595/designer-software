@@ -3,7 +3,7 @@
  *   home  — choose the artwork
  *   brief — art style, client brief, reference, size → send
  *   jobs  — what the agent is drawing, and the finished artwork
- * plus "skills" — which skill draws each style and artwork (for the studio owner, reached from Jobs)
+ * plus "skills" — add skills, choose the default skill and which skill draws each style and artwork
  */
 import { getTemplate } from './catalog';
 

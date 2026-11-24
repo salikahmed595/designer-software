@@ -15,9 +15,10 @@ interface HeaderProps {
   activeJobs: number;
   onHome: () => void;
   onJobs: () => void;
+  onSkills: () => void;
 }
 
-export function GlassHeader({ page, activeJobs, onHome, onJobs }: HeaderProps) {
+export function GlassHeader({ page, activeJobs, onHome, onJobs, onSkills }: HeaderProps) {
   return (
     <header className="topbar">
       <button type="button" className="brand" onClick={onHome} aria-label="Lumora home">
@@ -26,10 +27,11 @@ export function GlassHeader({ page, activeJobs, onHome, onJobs }: HeaderProps) {
       </button>
       <nav aria-label="Primary" className="flex items-center gap-1">
         <button type="button" className="nav-btn" aria-current={page === 'home' || page === 'brief' ? 'page' : undefined} onClick={onHome}>New artwork</button>
-        <button type="button" className="nav-btn" aria-current={page === 'jobs' || page === 'skills' ? 'page' : undefined} onClick={onJobs}>
+        <button type="button" className="nav-btn" aria-current={page === 'jobs' ? 'page' : undefined} onClick={onJobs}>
           Jobs
           {activeJobs > 0 && <span className="count-badge" aria-label={`${activeJobs} in progress`}>{activeJobs}</span>}
         </button>
+        <button type="button" className="nav-btn" aria-current={page === 'skills' ? 'page' : undefined} onClick={onSkills}>Skills</button>
       </nav>
     </header>
   );

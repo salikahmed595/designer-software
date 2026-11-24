@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getTemplate } from '../state/catalog';
 import { MAX_BRIEF_CHARS, MAX_TEXT, RATIOS, REF_ROLES } from '../state/flow';
 import {
-  ART_STYLES, getArtStyle, productionIssues, ratioLabel, skillsFor, type BridgeHealth, type JobView, type SkillRole, type SkillUse,
+  ART_STYLES, getArtStyle, productionIssues, ratioLabel, skillsFor, type BridgeHealth, type JobView, type SkillMap, type SkillRole, type SkillUse,
 } from '../state/production';
 import { IconCheck, IconClose, IconPlus } from '../components/icons';
 import { ChoiceCheck, GuidedStepper, rise } from './ui';
@@ -35,7 +35,7 @@ function DrawnWith({ skills }: { skills: SkillUse[] }) {
   );
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/production/${path}`, init);
   const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!res.ok || body === null) throw new Error(body?.error ?? 'Production did not answer.');
@@ -95,7 +95,7 @@ function BridgeNote({ health }: { health: BridgeHealth | null }) {
 }
 
 /** Step 2 — everything the agent needs, on one screen. */
-export function BriefPage({ state, dispatch, onAddReference, bridge }: PageProps & { bridge: Bridge }) {
+export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }: PageProps & { bridge: Bridge; skillMap: SkillMap | null }) {
   const { brief } = state;
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -284,7 +284,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge }: PageProps
               : canRun ? 'One job is drawn at a time. You can start the next brief straight away.'
               : 'The job will be saved, but it can’t start until the agent is available.'}
           </p>
-          <DrawnWith skills={skillsFor(template.id, style?.id)} />
+          {skillMap && <DrawnWith skills={skillsFor(skillMap, template.id, style?.id)} />}
           {bridge.health !== null && !(online && bridge.health.runner === 'claude') && <BridgeNote health={bridge.health} />}
         </aside>
       </form>
@@ -303,7 +303,6 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
           <p className="stage-sub">Everything sent to production. Finished artwork appears here.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className="btn" onClick={() => dispatch({ type: 'openSkills' })}>Skill setup</button>
           <button type="button" className="btn" onClick={() => void refresh()}>Refresh</button>
           <button type="button" className="btn btn-primary" onClick={() => dispatch({ type: 'goHome' })}><IconPlus width={16} height={16} /> New artwork</button>
         </div>

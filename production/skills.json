@@ -1,24 +1,24 @@
 {
-  "_readme": "Which skill draws what. Put a skill's exact folder name in a slot (for example \"anime-art\"); null means the general skill (defaultSkill) is used until you add one. A job loads the art style's skill (how it looks) AND the artwork's skill (what to deliver). Save the file and the app picks it up; the Skills screen (Jobs → Skill setup) shows every slot and warns if a skill is not installed. A new art style also needs a thumbnail named style-<id> in thumbnails/.",
+  "_readme": "Which skill draws each art style and artwork type. Change it on the Skills screen in the app (it saves this file). null = use the default skill.",
   "defaultSkill": "2d-artwork-photoshop-illustrator",
-  "styles": [
-    { "id": "anime-cel", "name": "Anime", "category": "Character", "skill": null, "colors": ["#f08ad6", "#ffc9a8"], "description": "Clean lines with flat cel shading" },
-    { "id": "manga", "name": "Manga", "category": "Illustration", "skill": null, "colors": ["#f2f2f2", "#9aa0a6"], "description": "Black-and-white inks with screentone" },
-    { "id": "pastel-anime", "name": "Semi-Realistic Pastel Anime", "category": "Character", "skill": null, "colors": ["#b9a7f5", "#ffdfe8"], "description": "Soft pastel colours, gentle realistic shading" },
-    { "id": "semi-real", "name": "Semi-Realistic", "category": "Illustration", "skill": null, "colors": ["#c98a6a", "#ffd9b8"], "description": "Realistic light and form, stylized features" },
-    { "id": "chibi", "name": "Chibi / Super Deformed", "category": "Character", "skill": null, "colors": ["#ff9ec4", "#ffe0c2"], "description": "Big head, small body, cute and simple" },
-    { "id": "cartoon", "name": "Cartoon", "category": "Vector", "skill": null, "colors": ["#ffb23e", "#ffe28a"], "description": "Bold outlines and playful shapes" },
-    { "id": "flat-vector", "name": "Vector Artwork", "category": "Vector", "skill": "2dvector-photoshop-illustrator-salik", "colors": ["#9cfb59", "#4fd0ff"], "description": "Clean flat shapes, few colours" },
-    { "id": "pixel-art", "name": "Pixel Art", "category": "Illustration", "skill": null, "colors": ["#5ad1a0", "#ffd9a8"], "description": "Retro game sprites on a pixel grid" },
-    { "id": "digital-painting", "name": "Digital Painting / Concept Art", "category": "Illustration", "skill": null, "colors": ["#5b8def", "#ffb37a"], "description": "Painterly scenes with mood and depth" },
-    { "id": "viking", "name": "Medieval Viking Art", "category": "Illustration", "skill": null, "colors": ["#c9a24b", "#8c2f2f"], "description": "Norse shields, knotwork and runes" },
-    { "id": "vtuber-model", "name": "VTuber Model", "category": "Character", "skill": "vtuber-master", "colors": ["#c58aff", "#ffd0e4"], "description": "Front-facing character split into layers" },
-    { "id": "pfp-cinematic", "name": "Cinematic PFP", "category": "Character", "skill": "2d-pfp", "colors": ["#7c8cff", "#ffd9b8"], "description": "Hero portrait with rim light and glow" },
-    { "id": "esports-mascot", "name": "Esports Mascot", "category": "Vector", "skill": null, "colors": ["#ff6a4d", "#ffd45a"], "description": "Aggressive mascot with thick outlines" },
-    { "id": "sticker", "name": "Sticker", "category": "Vector", "skill": null, "colors": ["#ffa25c", "#ffe07a"], "description": "White border, big expression" },
-    { "id": "comic-ink", "name": "Comic Ink", "category": "Illustration", "skill": null, "colors": ["#ffcf40", "#ff5a5a"], "description": "Heavy inks and halftone dots" },
-    { "id": "line-art", "name": "Clean Line Art", "category": "Line Art", "skill": null, "colors": ["#e8eef0", "#9fb4c0"], "description": "Outlines only, ready to colour" }
-  ],
+  "styles": {
+    "anime-cel": null,
+    "manga": null,
+    "pastel-anime": null,
+    "semi-real": null,
+    "chibi": null,
+    "cartoon": null,
+    "flat-vector": "2dvector-photoshop-illustrator-salik",
+    "pixel-art": null,
+    "digital-painting": null,
+    "viking": null,
+    "vtuber-model": "vtuber-master",
+    "pfp-cinematic": "2d-pfp",
+    "esports-mascot": null,
+    "sticker": null,
+    "comic-ink": null,
+    "line-art": null
+  },
   "artworks": {
     "stream-overlay": null,
     "starting-soon": null,
@@ -28,7 +28,6 @@
     "stream-panels": null,
     "offline-screen": null,
     "full-stream-kit": null,
-
     "server-icon": null,
     "server-banner": null,
     "profile-art": "2d-pfp",
@@ -37,7 +36,6 @@
     "role-icons": null,
     "event-poster": null,
     "bot-avatar": null,
-
     "gaming-avatar": "2d-pfp",
     "mascot": null,
     "chibi-character": null,
@@ -46,7 +44,6 @@
     "anime-portrait": null,
     "expression-sheet": null,
     "character-sheet": null,
-
     "static-emotes": null,
     "chibi-emotes": null,
     "discord-emojis": null,
@@ -55,7 +52,6 @@
     "rank-badges": null,
     "point-icons": null,
     "text-emotes": null,
-
     "gaming-logo": null,
     "esports-logo": null,
     "youtube-thumbnail": null,

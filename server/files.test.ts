@@ -1,9 +1,10 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fakePsd, installedSkills, psdLayerCount, psdLayerCountOfFile } from './files';
+import { defaultSkillMap } from '../src/state/production';
+import { fakePsd, installSkill, listSkills, psdLayerCount, psdLayerCountOfFile, readSkillMap, writeSkillMap } from './files';
 
 const reader = (buf: Buffer) => async (pos: number, len: number) => buf.subarray(pos, pos + len);
 
@@ -46,25 +47,97 @@ describe('PSD layer count (so a flat file can be caught)', () => {
   });
 });
 
+const skillFile = (name: string, description = `How to draw ${name}.`) => `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`;
+
 describe('installed skills', () => {
   let a: string;
   let b: string;
   beforeAll(async () => {
     a = await mkdtemp(path.join(os.tmpdir(), 'lumora-skills-a-'));
     b = await mkdtemp(path.join(os.tmpdir(), 'lumora-skills-b-'));
-    for (const [dir, name] of [[a, 'anime-art'], [a, 'vtuber-master'], [b, 'manga-effects']]) {
+    for (const [dir, name] of [[a, 'vtuber-master'], [a, 'anime-art'], [b, 'manga-effects'], [b, 'anime-art']]) {
       await mkdir(path.join(dir, name), { recursive: true });
-      await writeFile(path.join(dir, name, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+      await writeFile(path.join(dir, name, 'SKILL.md'), skillFile(name));
     }
     await mkdir(path.join(a, 'no-skill-file'), { recursive: true });
+    await mkdir(path.join(a, 'broken'), { recursive: true });
+    await writeFile(path.join(a, 'broken', 'SKILL.md'), 'no front matter here');
   });
   afterAll(async () => {
     await rm(a, { recursive: true, force: true });
     await rm(b, { recursive: true, force: true });
   });
 
-  it('finds skill folders that contain a SKILL.md, across several places', async () => {
-    const found = await installedSkills([a, b, path.join(a, 'does-not-exist')]);
-    expect([...found].sort()).toEqual(['anime-art', 'manga-effects', 'vtuber-master']);
+  it('finds skill folders with a SKILL.md across several places, sorted, each once, with its description', async () => {
+    const found = await listSkills([a, b, path.join(a, 'does-not-exist')]);
+    expect(found.map((s) => s.name)).toEqual(['anime-art', 'broken', 'manga-effects', 'vtuber-master']);
+    expect(found.find((s) => s.name === 'manga-effects')?.description).toBe('How to draw manga-effects.');
+    expect(found.find((s) => s.name === 'broken')?.description).toBe('');
+  });
+});
+
+describe('adding a skill from the Skills screen', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'lumora-install-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('writes <dir>/<name>/SKILL.md, creating the folder if needed', async () => {
+    const target = path.join(dir, 'nested', 'skills');
+    await installSkill(target, 'anime-art', skillFile('anime-art'));
+    expect(await readFile(path.join(target, 'anime-art', 'SKILL.md'), 'utf8')).toBe(skillFile('anime-art'));
+  });
+
+  it('never overwrites a skill that is already there', async () => {
+    await installSkill(dir, 'anime-art', skillFile('anime-art', 'original'));
+    await expect(installSkill(dir, 'anime-art', skillFile('anime-art', 'replacement'))).rejects.toThrow(/already/i);
+    expect(await readFile(path.join(dir, 'anime-art', 'SKILL.md'), 'utf8')).toContain('original');
+  });
+
+  it('refuses names that could leave the skills folder', async () => {
+    for (const bad of ['../evil', '..', 'a/b', 'a\\b', '', '.hidden']) {
+      await expect(installSkill(dir, bad, 'x'), bad).rejects.toThrow(/name/i);
+    }
+  });
+});
+
+describe('the skill map file', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'lumora-map-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('saves and reads back the same map, keeping the explanation for people who open the file', async () => {
+    const file = path.join(dir, 'skills.json');
+    const map = { ...defaultSkillMap(), defaultSkill: 'house-style', styles: { ...defaultSkillMap().styles, manga: 'manga-effects' } };
+    await writeSkillMap(file, map);
+    const back = await readSkillMap(file);
+    expect(back.error).toBeNull();
+    expect(back.map).toEqual(map);
+    expect(JSON.parse(await readFile(file, 'utf8'))._readme).toMatch(/Skills screen/);
+    expect((await readdir(dir)).filter((f) => f !== 'skills.json')).toEqual([]);
+  });
+
+  it('uses the built-in defaults when the file is missing', async () => {
+    const r = await readSkillMap(path.join(dir, 'missing.json'));
+    expect(r).toEqual({ map: defaultSkillMap(), error: null });
+  });
+
+  it('keeps a broken file aside instead of losing it, and says so', async () => {
+    const file = path.join(dir, 'skills.json');
+    await writeFile(file, '{ this is not json');
+    const r = await readSkillMap(file);
+    expect(r.map).toEqual(defaultSkillMap());
+    expect(r.error).toMatch(/could not be read/i);
+    await writeSkillMap(file, r.map);
+    const kept = (await readdir(dir)).filter((f) => f.startsWith('skills.json.broken-'));
+    expect(kept).toHaveLength(1);
+    expect(await readFile(path.join(dir, kept[0]), 'utf8')).toBe('{ this is not json');
   });
 });
