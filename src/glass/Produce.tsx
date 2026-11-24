@@ -407,6 +407,7 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
                 <p className="job-meta">
                   {j.handmade && <>{HANDMADE_LABEL[j.handmade]} · </>}
                   {jobSkills(j).length > 0 && <>{j.handmade && j.handmade !== 'draw' ? 'Checklist from' : 'Drawn with'} {jobSkills(j).map((s, k) => <span key={s.name}>{k > 0 && ' + '}<code>{s.name}</code></span>)} · </>}
+                  {j.account && <>Ran on {j.account} · </>}
                   job {j.id}
                 </p>
               </div>

@@ -21,9 +21,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import type { Plugin } from 'vite';
-import { ensureAdobe, readRegisteredServers } from './adobe';
+import { accountsSummary, agentAccounts, agentArgs, agentEnv, bareSkillNote, mcpServersFor, runWithFallback } from './accounts';
+import { ensureAdobe, readRegisteredServers, shellArg } from './adobe';
 import {
-  DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, REDRAW_BLOCKED_TOOLS, SOURCE_FILES, applySkillChange, buildAgentPrompt,
+  accountProblem, DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, REDRAW_BLOCKED_TOOLS, SOURCE_FILES, applySkillChange, buildAgentPrompt,
   buildRedrawPrompt, handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
   type BridgeHealth, type DownloadFile, type HandInKind, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
 } from '../src/state/production';
@@ -84,20 +85,36 @@ function readJson(req: IncomingMessage): Promise<unknown> {
 
 const exists = (p: string) => fs.stat(p).then((s) => s.size > 0, () => false);
 
-function runProcess(bin: string, args: string[], cwd: string, stdin: string | null, timeoutMs: number, logFile: string | null): Promise<number | null> {
+function runProcess(
+  bin: string, args: string[], cwd: string, stdin: string | null, timeoutMs: number, logFile: string | null, env?: NodeJS.ProcessEnv,
+): Promise<number | null> {
   return new Promise((resolve) => {
-    // shell is needed on Windows for .cmd shims; every argument here is a fixed constant, never user text.
+    // shell is needed on Windows for .cmd shims; arguments are fixed constants or our own paths, quoted for cmd.
     const viaShell = process.platform === 'win32';
-    const command = viaShell && /\s/.test(bin) && !bin.startsWith('"') ? `"${bin}"` : bin;
-    const child = spawn(command, args, { cwd, shell: viaShell, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let command = bin;
+    let argv = args;
+    try {
+      if (viaShell) {
+        command = /\s/.test(bin) && !bin.startsWith('"') ? `"${bin}"` : bin;
+        argv = args.map(shellArg);
+      }
+    } catch {
+      resolve(null);
+      return;
+    }
+    const child = spawn(command, argv, { cwd, shell: viaShell, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...(env ? { env } : {}) });
     const log: Buffer[] = [];
     const timer = setTimeout(() => child.kill(), timeoutMs);
     child.stdout.on('data', (d: Buffer) => log.push(d));
     child.stderr.on('data', (d: Buffer) => log.push(d));
+    let finished = false;
     const finish = (code: number | null) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
-      if (logFile) void fs.writeFile(logFile, Buffer.concat(log)).catch(() => undefined);
-      resolve(code);
+      // The log is complete before the caller reads it (it decides whether to try the next account).
+      if (logFile) void fs.writeFile(logFile, Buffer.concat(log)).catch(() => undefined).then(() => resolve(code));
+      else resolve(code);
     };
     child.on('error', () => finish(null));
     child.on('close', finish);
@@ -147,7 +164,7 @@ export function productionBridge(): Plugin {
       const claudeJson = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => '');
       const adobe = await ensureAdobe({ claudeBin, roots: [os.homedir(), jobsDir], registered: readRegisteredServers(claudeJson) });
       runner = adobe.ok ? 'claude' : 'off';
-      detail = adobe.detail;
+      detail = [adobe.detail, adobe.ok ? accountsSummary(agentAccounts(process.env)) : ''].filter(Boolean).join(' ');
     } else {
       detail = 'The drawing agent is not set up on this computer yet, so jobs are saved but cannot start. Ask your studio admin — the setup steps are in the README.';
     }
@@ -178,9 +195,32 @@ export function productionBridge(): Plugin {
     await fs.mkdir(out, { recursive: true });
     // A hand-made redraw gets the same Adobe tools, minus the automatic ones (auto-trace, AI selection/remove/smoothing).
     const args = ['-p', '--allowedTools', ALLOWED_TOOLS, ...(job.handmade === 'draw' ? ['--disallowedTools', REDRAW_BLOCKED_TOOLS.join(',')] : [])];
-    const exitCode = runner === 'mock'
-      ? await runMock(out)
-      : await runProcess(claudeBin, args, job.dir, await fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8'), AGENT_TIMEOUT_MS, path.join(job.dir, 'agent.log'));
+    const logFile = path.join(job.dir, 'agent.log');
+    let exitCode: number | null;
+    let account: string | null = null;
+    let allOut: string[] | null = null;
+    if (runner === 'mock') {
+      exitCode = await runMock(out);
+    } else {
+      const prompt = await fs.readFile(path.join(job.dir, 'prompt.txt'), 'utf8');
+      const run = await runWithFallback(agentAccounts(process.env), async (acct, i) => {
+        if (i > 0) {
+          // The previous account ran out: start clean, keep its log for reference.
+          await fs.rename(logFile, path.join(job.dir, `agent-attempt-${i}.log`)).catch(() => undefined);
+          await fs.rm(out, { recursive: true, force: true });
+          await fs.mkdir(out, { recursive: true });
+        }
+        const bare = acct.kind === 'apikey' ? await bareSetup(job) : { mcpFile: '', note: '' };
+        await update(job.id, { account: acct.label });
+        const code = await runProcess(claudeBin, agentArgs(args, acct, bare.mcpFile), job.dir, prompt + bare.note, AGENT_TIMEOUT_MS, logFile, agentEnv(process.env, acct));
+        const drew = await exists(path.join(out, 'preview.png'));
+        const log = drew ? '' : await fs.readFile(logFile, 'utf8').catch(() => '');
+        return { problem: drew ? null : accountProblem(log.slice(-4000)), value: code };
+      });
+      exitCode = run.value;
+      account = run.account.label;
+      if (run.exhausted && run.tried.length > 1) allOut = run.tried;
+    }
 
     let notes: string | null = null;
     let reportedOk: boolean | null = null;
@@ -200,7 +240,26 @@ export function productionBridge(): Plugin {
       reportedOk, notes, exitCode,
       agentLog: hasPreview ? null : (await fs.readFile(path.join(job.dir, 'agent.log'), 'utf8').catch(() => '')).slice(-4000),
     });
-    await update(job.id, { status: verdict.status, message: verdict.message, layers: verdict.layers, hasPreview, files });
+    const message = allOut && verdict.status === 'failed' ? `Every account was tried (${allOut.join(' → ')}). ${verdict.message ?? ''}`.trim() : verdict.message;
+    await update(job.id, { status: verdict.status, message, layers: verdict.layers, hasPreview, files, account });
+  }
+
+  /** API-key runs use --bare: pass the Adobe connectors in, and say where the skill files are. */
+  async function bareSetup(job: StoredJob): Promise<{ mcpFile: string; note: string }> {
+    const mcpFile = path.join(job.dir, 'mcp.json');
+    const claudeJson = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => '');
+    await fs.writeFile(mcpFile, JSON.stringify(mcpServersFor(claudeJson), null, 2));
+    const skills: Array<{ name: string; file: string }> = [];
+    for (const s of job.skills) {
+      for (const dir of skillDirs()) {
+        const file = path.join(dir, s.name, 'SKILL.md');
+        if (await exists(file)) {
+          skills.push({ name: s.name, file });
+          break;
+        }
+      }
+    }
+    return { mcpFile, note: bareSkillNote(skills) };
   }
 
   /* ---------- skills: read on every request so a change (in the app or by hand) applies to the next job ---------- */

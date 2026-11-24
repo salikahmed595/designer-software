@@ -312,6 +312,8 @@ export interface JobView {
   handedInAt?: number | null;
   /** layer count read from artwork.psd, when there is one */
   layers: number | null;
+  /** which Claude account ran (or is running) the agent, e.g. "Backup Claude account 2" */
+  account?: string | null;
 }
 
 export interface BridgeHealth { online: boolean; runner: RunnerKind; detail: string }
@@ -501,17 +503,31 @@ export interface AgentOutput {
   agentLog?: string | null;
 }
 
+const LIMIT_RE = /hit your .*limit|credit balance is too low/i;
+const AUTH_RE = /invalid api key|please run \/login|not logged in|failed to authenticate|access token is invalid/i;
+
+/** Did the account itself stop the job — out of usage/credit ('limit') or unable to sign in ('auth')? */
+export function accountProblem(log: string | null | undefined): 'limit' | 'auth' | null {
+  if (!log) return null;
+  if (LIMIT_RE.test(log)) return 'limit';
+  if (AUTH_RE.test(log)) return 'auth';
+  return null;
+}
+
 /** A plain reason when Claude Code itself refused to run the job (usage limit, not signed in), else null. */
 export function agentLogProblem(log: string | null | undefined): string | null {
   if (!log) return null;
+  if (/credit balance is too low/i.test(log)) {
+    return 'The Anthropic API key has no credit left, so nothing was drawn. Add credit in the Anthropic Console, then send this artwork again.';
+  }
   if (/hit your .*limit/i.test(log)) {
     const reset = /resets\s+([^\r\n]+)/i.exec(log)?.[1]?.trim();
     return reset
       ? `Claude’s usage limit is used up, so nothing was drawn. It resets at ${reset} — send this artwork again after that.`
       : 'Claude’s usage limit is used up, so nothing was drawn. Send this artwork again once it resets.';
   }
-  if (/invalid api key|please run \/login|not logged in/i.test(log)) {
-    return 'Claude Code is not signed in on this computer, so nothing was drawn. Run “claude” in a terminal, sign in, then send this artwork again.';
+  if (AUTH_RE.test(log)) {
+    return 'The Claude account could not sign in (not signed in, or the token / API key is wrong or expired), so nothing was drawn. Run “claude” in a terminal and sign in, or replace the token / key, then send this artwork again.';
   }
   return null;
 }
