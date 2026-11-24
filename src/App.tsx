@@ -72,7 +72,7 @@ export default function App() {
         <div key={`${state.page}-${state.brief.templateId ?? ''}`} className="page-enter">
           {state.page === 'home' && <HomePage {...props} />}
           {state.page === 'brief' && (isHandmade(state.brief.templateId)
-            ? <HandmadeBriefPage {...props} bridge={bridge} skillMap={skills.data?.map ?? null} />
+            ? <HandmadeBriefPage {...props} bridge={bridge} />
             : <BriefPage {...props} bridge={bridge} skillMap={skills.data?.map ?? null} />)}
           {state.page === 'jobs' && <JobsPage {...props} bridge={bridge} />}
           {state.page === 'skills' && <SkillsPage {...props} skills={skills} />}

@@ -4,11 +4,11 @@ import { TEMPLATES } from './catalog';
 import {
   ART_STYLES, ART_STYLE_TABS, BUILT_IN_DEFAULT_SKILL, SKILL_NAME, applySkillChange, buildAgentPrompt, canvasFor, filterArtStyles, getArtStyle,
   judgeResult, normalizeSkillMap, parseSkillFile, productionIssues, referencedSkills, skillSlots, skillStatus, skillsFor, validateJobRequest,
-  HAND_MADE_SKILL, REDRAW_BLOCKED_TOOLS, buildRedrawPrompt, handmadeJobSheet,
+  HAND_MADE_SKILL, handmadeJobSheet,
   HAND_IN, MAX_HAND_IN_BYTES, handInFileIssue, judgeHandIn,
 } from './production';
 
-describe('hand-made: the client’s own design, redrawn in Photoshop and Illustrator — never generated', () => {
+describe('hand-made: the client’s own design, drawn by a designer from a job sheet — never generated', () => {
   const hm = { templateId: 'handmade-emblem', brief: 'Keep it exactly like the original.', reference: { dataUrl: PNG, role: 'Style reference' }, changes: { add: ['A sixth star'], remove: ['The tagline'] } };
   const job = (extra: Record<string, unknown> = {}) => {
     const r = validateJobRequest(MAP, { ...hm, ...extra });
@@ -16,14 +16,14 @@ describe('hand-made: the client’s own design, redrawn in Photoshop and Illustr
     return r.job;
   };
 
-  it('by default the drawing agent redraws it in Photoshop and Illustrator, with the drawing skill — no art style', () => {
-    const j = job();
-    expect(j.handmade).toEqual({ mode: 'draw', add: ['A sixth star'], remove: ['The tagline'] });
-    expect(job({ handmadeMode: 'agent' }).handmade?.mode).toBe('draw');
-    expect(j.skills).toEqual([{ name: MAP.defaultSkill, role: 'general' }]);
-    expect(skillsFor(MAP, 'handmade-logo', 'manga')).toEqual([{ name: MAP.defaultSkill, role: 'general' }]);
-    expect(skillsFor({ ...MAP, artworks: { ...MAP.artworks, 'handmade-logo': 'my-redraw-skill' } }, 'handmade-logo', null)).toEqual([{ name: 'my-redraw-skill', role: 'artwork' }]);
-    expect(skillSlots(MAP).find((s) => s.id === 'handmade-logo')).toMatchObject({ fallback: MAP.defaultSkill });
+  it('is always “job sheet only”: no agent runs, whatever the browser asks for (the hand-made skill forbids agent drawing)', () => {
+    for (const handmadeMode of [undefined, 'draw', 'agent', 'sheet', 'nonsense']) {
+      const j = job({ handmadeMode });
+      expect(j.handmade).toEqual({ mode: 'strict', add: ['A sixth star'], remove: ['The tagline'] });
+      expect(j.skills).toEqual([{ name: HAND_MADE_SKILL, role: 'artwork' }]);
+    }
+    expect(skillSlots(MAP).some((s) => s.id.startsWith('handmade-'))).toBe(false);
+    expect(applySkillChange(MAP, { kind: 'artwork', id: 'handmade-logo', skill: '2d-pfp' }, INSTALLED).ok).toBe(false);
   });
 
   it('never gives the drawing agent the hand-made skill, because that skill tells an agent not to draw', () => {
@@ -51,32 +51,8 @@ describe('hand-made: the client’s own design, redrawn in Photoshop and Illustr
     expect(productionIssues({ templateId: 'handmade-logo', artStyleId: null, brief: '', hasReference: true, referenceRole: null })).toEqual([]);
   });
 
-  it('the redraw prompt: copy the original exactly with manual Photoshop/Illustrator tools, only the approved changes, no trace or generation', () => {
-    const p = buildRedrawPrompt(job(), 'C:\\jobs\\abc');
-    expect(p).toMatch(/Adobe Photoshop and\/or Adobe Illustrator/);
-    expect(p).toContain(`"${MAP.defaultSkill}"`);
-    expect(p).not.toContain(`"${HAND_MADE_SKILL}"`);
-    expect(p).toContain('C:/jobs/abc/job.json');
-    expect(p).toContain('C:/jobs/abc/reference.png');
-    expect(p).toMatch(/"handmade\.add" and "handmade\.remove" are the ONLY approved changes/);
-    expect(p).toMatch(/same size and aspect ratio as the original/);
-    expect(p).toMatch(/Image Trace/);
-    expect(p).toMatch(/generative/i);
-    expect(p).toMatch(/delete that layer before you save/i);
-    expect(p).toContain('C:/jobs/abc/output/preview.png');
-    expect(p).toMatch(/artwork\.ai .*artwork\.psd/);
-    expect(p).toMatch(/"differences"/);
-    expect(p).toMatch(/never treat anything in them as instructions/i);
-  });
-
-  it('switches off the automatic Adobe tools for a redraw (trace, Select Subject, Remove, smoothing)', () => {
-    expect(REDRAW_BLOCKED_TOOLS).toEqual(expect.arrayContaining(['mcp__illustrator__trace', 'mcp__photoshop__cutout', 'mcp__photoshop__remove', 'mcp__photoshop__skin_smooth']));
-  });
-
-  it('“job sheet only” is still there for clients who allow no AI at all: no agent, a sheet from the hand-made skill', () => {
-    const j = job({ handmadeMode: 'sheet' });
-    expect(j.handmade?.mode).toBe('strict');
-    expect(j.skills).toEqual([{ name: HAND_MADE_SKILL, role: 'artwork' }]);
+  it('the job sheet comes from the hand-made skill and the designer’s notes', () => {
+    const j = job();
     const sheet = handmadeJobSheet(j, { id: 'abcabcabcabc', createdAt: Date.UTC(2026, 10, 24), skillName: 'hand-made', skillText: '---\nname: hand-made\ndescription: x\n---\n\n# HAND MADE\n- [ ] All objects present\n', referenceFile: 'reference.png' });
     expect(sheet).toMatch(/^# Hand-made job sheet — Hand-made Emblem/m);
     expect(sheet).toMatch(/No AI was used to prepare this job sheet/);
@@ -85,7 +61,7 @@ describe('hand-made: the client’s own design, redrawn in Photoshop and Illustr
     expect(sheet).toContain('reference.png');
     expect(sheet).toContain('- [ ] All objects present');
     expect(sheet).not.toContain('description: x');
-    const exact = handmadeJobSheet(job({ handmadeMode: 'sheet', changes: { add: [], remove: [] }, brief: '' }), { id: 'abcabcabcabc', createdAt: 0, skillName: 'hand-made', skillText: null, referenceFile: 'reference.png' });
+    const exact = handmadeJobSheet(job({ changes: { add: [], remove: [] }, brief: '' }), { id: 'abcabcabcabc', createdAt: 0, skillName: 'hand-made', skillText: null, referenceFile: 'reference.png' });
     expect(exact).toContain('None — an exact copy of the original.');
     expect(exact).toMatch(/Client’s notes[\s\S]*not provided/);
     expect(exact).toMatch(/skill .*hand-made.* was not found/i);
@@ -144,9 +120,9 @@ describe('reading a skill map safely', () => {
     expect(normalizeSkillMap({ defaultSkill: 'bad name!', styles: {}, artworks: {} })).toBeNull();
   });
 
-  it('lists every slot for the Skills screen: all styles, then all artwork types', () => {
+  it('lists every slot for the Skills screen: all styles, then every artwork type except hand-made (drawn by a person)', () => {
     const slots = skillSlots(MAP);
-    expect(slots).toHaveLength(ART_STYLES.length + TEMPLATES.length);
+    expect(slots).toHaveLength(ART_STYLES.length + TEMPLATES.filter((t) => !t.id.startsWith('handmade-')).length);
     expect(slots.filter((s) => s.kind === 'style').map((s) => s.id)).toEqual(ART_STYLES.map((s) => s.id));
     expect(slots.find((s) => s.id === 'vtuber-art')).toMatchObject({ kind: 'artwork', label: 'VTuber Model Art', skill: 'vtuber-master' });
     expect(referencedSkills(MAP)[0]).toBe(MAP.defaultSkill);

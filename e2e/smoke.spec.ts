@@ -140,7 +140,7 @@ test('a designer adds their own skill, uses it for a style, and changes the defa
 
   await nav.getByRole('button', { name: 'Skills' }).click();
   await expect(h1(page, /^skills$/i)).toBeVisible();
-  await expect(page.getByRole('table', { name: 'Artwork types' }).getByRole('row')).toHaveCount(45);
+  await expect(page.getByRole('table', { name: 'Artwork types' }).getByRole('row')).toHaveCount(41); // 40 agent-drawn types + the header row (hand-made types have no drawing skill)
   const defaultPick = page.getByRole('combobox', { name: 'Default skill' });
   await expect(defaultPick).toHaveValue('2d-artwork-photoshop-illustrator');
   await noOverflow(page);
@@ -204,41 +204,26 @@ async function fillHandmadeBrief(page: Page, extra: string) {
   await page.locator('input[type=file]').setInputFiles({ name: 'machine-corps.png', mimeType: 'image/png', buffer: PNG });
 }
 
-test('hand-made: by default the original is redrawn in Photoshop and Illustrator, as layered files', async ({ page, request, isMobile }) => {
-  const errors: string[] = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  const extra = `Gold rim ${isMobile ? 'm' : 'd'} ${Date.now()}`;
-  await fillHandmadeBrief(page, extra);
-  await expect(page.locator('.stage-sub')).toContainText(/redrawn in photoshop and illustrator/i);
-  await expect(page.getByRole('checkbox', { name: /job sheet only/i })).not.toBeChecked();
-  await page.getByRole('button', { name: /send to production/i }).click();
-
-  await expect(h1(page, /^jobs$/i)).toBeVisible();
-  const job = page.getByRole('list', { name: 'Jobs' }).getByRole('listitem').filter({ hasText: 'Hand-made Emblem' }).first();
-  await expect(job).toHaveAttribute('data-status', 'done', { timeout: 15000 });
-  await expect(job).toContainText(/redrawn in photoshop\/illustrator with manual tools/i);
-  await expect(job.getByRole('link', { name: /download layered psd/i })).toContainText('3 layers');
-  await expect(job.getByRole('link', { name: 'Download job sheet' })).toHaveCount(0);
-
-  // The agent got the redraw instructions: the drawing skill, the approved changes, no trace or generation.
-  const { jobs } = (await (await request.get('/api/production/jobs')).json()) as { jobs: { id: string; templateTitle: string; handmade?: string }[] };
-  const sent = jobs.find((j) => j.templateTitle === 'Hand-made Emblem' && j.handmade === 'draw')!;
-  const prompt = await readFile(path.join('test-results', 'production-jobs', sent.id, 'prompt.txt'), 'utf8');
-  expect(prompt).toMatch(/REDRAW the client’s existing design/);
-  expect(prompt).toMatch(/Image Trace/);
-  expect(prompt).not.toContain('"hand-made"');
-  const saved = JSON.parse(await readFile(path.join('test-results', 'production-jobs', sent.id, 'job.json'), 'utf8')) as { handmade: { mode: string; add: string[] } };
-  expect(saved.handmade).toMatchObject({ mode: 'draw', add: [extra] });
-  await noOverflow(page);
-  expect(errors).toEqual([]);
+test('hand-made: a request for an agent redraw still becomes a job sheet — no agent ever draws it', async ({ request }) => {
+  const made = await request.post('/api/production/jobs', {
+    data: { templateId: 'handmade-emblem', brief: '', handmadeMode: 'draw', changes: { add: ['Gold rim'], remove: [] }, reference: { dataUrl: `data:image/png;base64,${PNG.toString('base64')}`, role: 'Original to redraw' } },
+  });
+  expect(made.status()).toBe(201);
+  const { job } = (await made.json()) as { job: { id: string; handmade: string; status: string; files: string[] } };
+  expect(job).toMatchObject({ handmade: 'strict', status: 'done', files: ['handmade-job-sheet.md'] });
+  const dir = path.join('test-results', 'production-jobs', job.id);
+  await expect(readFile(path.join(dir, 'prompt.txt'), 'utf8')).rejects.toThrow();
+  const saved = JSON.parse(await readFile(path.join(dir, 'job.json'), 'utf8')) as { handmade: { mode: string; add: string[] } };
+  expect(saved.handmade).toMatchObject({ mode: 'strict', add: ['Gold rim'] });
 });
 
-test('hand-made “job sheet only”: no agent, a job sheet, then the designer hands in what they drew', async ({ page, isMobile }) => {
+test('hand-made: no agent, a job sheet, then the designer hands in what they drew', async ({ page, isMobile }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   const extra = `Silver rim ${isMobile ? 'm' : 'd'} ${Date.now()}`;
   await fillHandmadeBrief(page, extra);
-  await page.getByRole('checkbox', { name: /job sheet only/i }).check();
+  await expect(page.locator('.stage-sub')).toContainText(/a designer draws it by hand/i);
+  await expect(page.getByRole('checkbox')).toHaveCount(0);
   await page.getByRole('button', { name: /send to production/i }).click();
 
   await expect(h1(page, /^jobs$/i)).toBeVisible();

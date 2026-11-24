@@ -36,18 +36,16 @@ npm run build
 4. The bridge checks the result before calling it finished: there must be a preview **and** a layered source file. It reads the layer count from `artwork.psd`; a flattened PSD (one layer) is marked "Needs attention", because designers must be able to edit every part.
 5. The Jobs screen shows the status, the skills used, the notes, and **Download layered PSD** / **Download Illustrator file** buttons.
 
-### Hand-made (the client's own design, redrawn — never generated)
+### Hand-made (the client's own design, drawn by a person — never generated)
 
 For a client who wants their **own design recreated**, not AI-generated. Pick **Hand-made** on the first screen (Logo, Emblem, Illustration or Character).
 
 - The brief asks for the **client's original** (required) instead of an art style. There is no size choice: the original decides.
 - **Changes from the original**: two lists, *Add to the design* and *Take out of the design*. Type an item and press Add (or Enter); delete an item with ×. Empty lists mean an exact copy. Only approved changes go in; everything else stays as it is.
-- **By default, Send redraws it in Photoshop and Illustrator.** The drawing agent rebuilds the original shape by shape with the apps' drawing tools (pen paths, shapes, live text, fills, masks, layer styles) and saves layered `artwork.psd` / `artwork.ai` plus a preview, checked like every other job (a flattened PSD fails). It may line shapes up against the original on a temporary reference layer, which it must delete before saving.
-- **What is switched off for a redraw:** Image Trace (`illustrator trace`), Select Subject (`photoshop cutout`), the Remove tool and skin smoothing. The agent is also told: no generative fill or AI image generation, no stock images, and no keeping the original's pixels in the artwork. `result.json` lists anything that differs from the original.
-- **Be accurate with clients:** the redraw is made by the studio's drawing agent operating Photoshop and Illustrator. It is not AI-*generated* art, but it is not drawn by a person either. If a client allows **no AI at all**, use *Job sheet only*.
-- **Job sheet only** (tick the box on the brief): no agent runs. Send creates `handmade-job-sheet.md` at once — the rule (no generative AI, no auto-trace), the original's file name, the approved changes, the client's notes, a hand-over checklist and the full text of the `hand-made` skill — and a designer draws it by hand. Because no agent runs, the sheet can truthfully say no AI was used to prepare it.
-- **Hand in the finished artwork**: on any hand-made job in **Jobs**, use **Upload layered PSD** / **Upload Illustrator file** (or **Replace…**) to add or replace the files — for example after a designer draws it or touches up the redraw. The files are then downloadable from the job (with the PSD's layer count), and the job shows when they were handed in. The bridge checks the real file, not its name: a PSD must be a readable, layered `.psd` (a flattened one-layer PSD or a `.psb` is refused with the reason), an `.ai` must be an Illustrator file, and the limit is 1 GB. Only hand-made jobs take a hand-in.
-- **Skills:** a redraw is drawn by the hand-made type's own skill on the Skills screen, or the default skill when it has none. The `hand-made` skill (`~/.claude/skills/hand-made/SKILL.md`) is a checklist written for people and tells an agent not to draw, so it is never given to the drawing agent and can't be picked there; it is used for *Job sheet only*.
+- **Send always makes a job sheet; no agent ever draws a hand-made job.** The `hand-made` skill (v3.0) forbids agent-controlled drawing for no-AI clients, so there is no redraw option. Send creates `handmade-job-sheet.md` at once — the rule (no generative AI, no auto-trace), the original's file name, the approved changes, the client's notes, a hand-over checklist and the full text of the `hand-made` skill — and a designer draws it by hand in Photoshop and Illustrator. Because no agent runs, the sheet can truthfully say no AI was used to prepare it. The bridge enforces this: a request that asks for an agent redraw (for example an old `handmadeMode: "draw"`) still becomes a job sheet.
+- **Hand in the finished artwork**: on any hand-made job in **Jobs**, use **Upload layered PSD** / **Upload Illustrator file** (or **Replace…**) to add or replace the files after the designer draws it. The files are then downloadable from the job (with the PSD's layer count), and the job shows when they were handed in. The bridge checks the real file, not its name: a PSD must be a readable, layered `.psd` (a flattened one-layer PSD or a `.psb` is refused with the reason), an `.ai` must be an Illustrator file, and the limit is 1 GB. Only hand-made jobs take a hand-in.
+- **Skills:** hand-made types are not on the Skills screen, because no agent draws them. The `hand-made` skill (`~/.claude/skills/hand-made/SKILL.md`) is the checklist in the job sheet; it can't be picked as a drawing skill.
+- Older jobs made before this change (agent redraws) still show in Jobs with their files and a label saying how they were made.
 
 ### The Skills screen (add skills, default skill)
 
@@ -65,7 +63,7 @@ A new art style also needs a thumbnail named `style-<id>` in `thumbnails/` (a te
 
 ### Turning the agent on (studio admin)
 
-The bridge looks for a `claude` command. Until it finds one, jobs (hand-made redraws too) are saved but never start, and the Jobs screen says the agent is not set up. If Claude Code is not installed as a command on the studio computer, install the Claude Code CLI, or set its full path before starting the app. (The copy inside the Claude desktop app works too, but its folder changes with every app update, so the CLI is the reliable choice.)
+The bridge looks for a `claude` command. Until it finds one, jobs are saved but never start (hand-made job sheets don't need it), and the Jobs screen says the agent is not set up. If Claude Code is not installed as a command on the studio computer, install the Claude Code CLI, or set its full path before starting the app. (The copy inside the Claude desktop app works too, but its folder changes with every app update, so the CLI is the reliable choice.)
 
 ```
 $env:LUMORA_CLAUDE_BIN = "C:\path\to\claude.exe"; npm run dev
@@ -103,7 +101,7 @@ Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests),
 
 ### Not verified yet
 
-A real end-to-end agent run in Photoshop and Illustrator — including a hand-made redraw, so how closely the agent matches an original is not known yet. The tests use the demo runner, which writes a placeholder preview and a skeleton 3-layer PSD that go through the same checks as a real job. The tests do check that a redraw gets the redraw instructions and that the automatic Adobe tools are switched off.
+The tests use the demo runner, which writes a placeholder preview and a skeleton 3-layer PSD that go through the same checks as a real job. Real agent runs in Photoshop 2024 and Illustrator 2024 have been done by hand on the studio computer, not in the automated tests.
 
 ## Where things are
 

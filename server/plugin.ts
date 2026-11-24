@@ -24,8 +24,8 @@ import type { Plugin } from 'vite';
 import { accountsSummary, agentAccounts, agentArgs, agentEnv, bareSkillNote, mcpServersFor, runWithFallback } from './accounts';
 import { ensureAdobe, readRegisteredServers, shellArg } from './adobe';
 import {
-  accountProblem, DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, REDRAW_BLOCKED_TOOLS, SOURCE_FILES, applySkillChange, buildAgentPrompt,
-  buildRedrawPrompt, handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
+  accountProblem, DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, SOURCE_FILES, applySkillChange, buildAgentPrompt,
+  handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
   type BridgeHealth, type DownloadFile, type HandInKind, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
 } from '../src/state/production';
 import {
@@ -193,8 +193,7 @@ export function productionBridge(): Plugin {
   async function runJob(job: StoredJob): Promise<void> {
     const out = path.join(job.dir, 'output');
     await fs.mkdir(out, { recursive: true });
-    // A hand-made redraw gets the same Adobe tools, minus the automatic ones (auto-trace, AI selection/remove/smoothing).
-    const args = ['-p', '--allowedTools', ALLOWED_TOOLS, ...(job.handmade === 'draw' ? ['--disallowedTools', REDRAW_BLOCKED_TOOLS.join(',')] : [])];
+    const args = ['-p', '--allowedTools', ALLOWED_TOOLS];
     const logFile = path.join(job.dir, 'agent.log');
     let exitCode: number | null;
     let account: string | null = null;
@@ -310,7 +309,7 @@ export function productionBridge(): Plugin {
     const briefExcerpt = job.brief === '' && mode ? 'Exact copy of the client’s original' : job.brief.length > 140 ? `${job.brief.slice(0, 140)}…` : job.brief;
     const base = { id, dir, createdAt, styleName: job.styleName, skills: job.skills, ratio: job.ratio, templateTitle: job.templateTitle, briefExcerpt, runner, handmade: mode, layers: null, hasPreview: false };
 
-    // Hand-made "job sheet only": no agent at all. The sheet is built from the designer's notes and the hand-made skill's text.
+    // Hand-made: no agent at all, ever (the hand-made skill forbids agent drawing). The sheet is built from the designer's notes and the hand-made skill's text.
     if (mode === 'strict') {
       const skillName = HAND_MADE_SKILL;
       const sheet = handmadeJobSheet(job, { id, createdAt, skillName, skillText: await readSkillText(skillDirs(), skillName), referenceFile: reference ? `reference.${reference.ext}` : null });
@@ -321,7 +320,7 @@ export function productionBridge(): Plugin {
       return stored;
     }
 
-    await fs.writeFile(path.join(dir, 'prompt.txt'), mode === 'draw' ? buildRedrawPrompt(job, dir) : buildAgentPrompt(job, dir));
+    await fs.writeFile(path.join(dir, 'prompt.txt'), buildAgentPrompt(job, dir));
     const stored: StoredJob = { ...base, status: 'queued', message: runner === 'off' ? 'Saved. It will not start until a runner is available.' : null, files: [] };
     jobs.set(id, stored);
     await save(stored);
