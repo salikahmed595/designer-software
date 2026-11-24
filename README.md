@@ -87,7 +87,7 @@ The bridge looks for a `claude` command. Until it finds one, jobs are saved but 
 $env:LUMORA_CLAUDE_BIN = "C:\path\to\claude.exe"; npm run dev
 ```
 
-The agent only uses **Photoshop 2024 and Illustrator 2024** (never another version). At startup the bridge checks both are installed and registers the `photoshop` / `illustrator` MCP servers with Claude Code if they are missing; if either app is missing, the Jobs screen says what to install.
+The agent only uses **Photoshop 2023 and Illustrator 2023** (never another version). At startup the bridge checks both are installed and registers the `photoshop` / `illustrator` MCP servers with Claude Code if they are missing; if either app is missing, the Jobs screen says what to install.
 
 #### Backup Claude accounts (when one runs out)
 
@@ -119,7 +119,7 @@ Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests),
 
 ### Not verified yet
 
-The tests use the demo runner, which writes a placeholder preview and a skeleton 3-layer PSD that go through the same checks as a real job. Real agent runs in Photoshop 2024 and Illustrator 2024 have been done by hand on the studio computer, not in the automated tests.
+The tests use the demo runner, which writes a placeholder preview and a skeleton 3-layer PSD that go through the same checks as a real job. Real agent runs in Photoshop and Illustrator have been done by hand on the studio computer, not in the automated tests.
 
 ## Where things are
 

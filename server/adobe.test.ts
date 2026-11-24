@@ -5,16 +5,16 @@ const okReply = (label: string) => JSON.stringify({ ok: true, result: { ok: true
 const missingReply = (label: string) => JSON.stringify({ ok: false, error: `${label} is not installed on this computer. Install ${label} (version 25.x), open it once, then try again.` });
 
 describe('parseCheck', () => {
-  it('accepts a passing 2024 check', () => {
-    expect(parseCheck('photoshop', 0, okReply('Adobe Photoshop 2024'))).toEqual({ app: 'photoshop', ok: true, message: 'Adobe Photoshop 2024 found at D:\\softwares\\x.exe.' });
+  it('accepts a passing 2023 check', () => {
+    expect(parseCheck('photoshop', 0, okReply('Adobe Photoshop 2023'))).toEqual({ app: 'photoshop', ok: true, message: 'Adobe Photoshop 2023 found at D:\\softwares\\x.exe.' });
   });
   it('passes the connector’s install message through', () => {
-    const r = parseCheck('photoshop', 1, missingReply('Adobe Photoshop 2024'));
+    const r = parseCheck('photoshop', 1, missingReply('Adobe Photoshop 2023'));
     expect(r.ok).toBe(false);
-    expect(r.message).toMatch(/Install Adobe Photoshop 2024/);
+    expect(r.message).toMatch(/Install Adobe Photoshop 2023/);
   });
   it('explains a connector that could not run at all', () => {
-    expect(parseCheck('illustrator', null, '').message).toMatch(/Illustrator 2024 connector .* could not run/);
+    expect(parseCheck('illustrator', null, '').message).toMatch(/Illustrator 2023 connector .* could not run/);
   });
   it('never treats garbage output as success', () => {
     expect(parseCheck('illustrator', 0, 'hello').ok).toBe(false);
@@ -22,15 +22,15 @@ describe('parseCheck', () => {
 });
 
 describe('adobeSummary', () => {
-  it('is connected only when both 2024 apps pass', () => {
+  it('is connected only when both 2023 apps pass', () => {
     const s = adobeSummary([{ app: 'photoshop', ok: true, message: '' }, { app: 'illustrator', ok: true, message: '' }]);
     expect(s.ok).toBe(true);
-    expect(s.detail).toMatch(/Photoshop 2024 and Illustrator 2024/);
+    expect(s.detail).toMatch(/Photoshop 2023 and Illustrator 2023/);
   });
   it('lists what to install and asks for a restart', () => {
-    const s = adobeSummary([{ app: 'photoshop', ok: true, message: '' }, { app: 'illustrator', ok: false, message: 'Install Adobe Illustrator 2024.' }]);
+    const s = adobeSummary([{ app: 'photoshop', ok: true, message: '' }, { app: 'illustrator', ok: false, message: 'Install Adobe Illustrator 2023.' }]);
     expect(s.ok).toBe(false);
-    expect(s.detail).toBe('Install Adobe Illustrator 2024. Then restart the studio app.');
+    expect(s.detail).toBe('Install Adobe Illustrator 2023. Then restart the studio app.');
   });
 });
 
@@ -70,7 +70,7 @@ describe('ensureAdobe', () => {
   };
 
   it('checks the already-registered connectors without registering again', async () => {
-    const { exec, calls } = fakeExec((bin) => ({ code: 0, stdout: okReply(bin.includes('ps') ? 'Adobe Photoshop 2024' : 'Adobe Illustrator 2024') }));
+    const { exec, calls } = fakeExec((bin) => ({ code: 0, stdout: okReply(bin.includes('ps') ? 'Adobe Photoshop 2023' : 'Adobe Illustrator 2023') }));
     const out = await ensureAdobe({ claudeBin: 'claude', roots: ['C:\\u'], registered: { photoshop: 'C:\\ps.exe', illustrator: 'C:\\ai.exe' }, exec });
     expect(out.ok).toBe(true);
     expect(calls).toEqual([['C:\\ps.exe', ['--json', 'app', 'check']], ['C:\\ai.exe', ['--json', 'app', 'check']]]);
@@ -80,7 +80,7 @@ describe('ensureAdobe', () => {
     const { exec, calls } = fakeExec((bin) => {
       if (bin === 'where') return { code: 0, stdout: 'C:\\venv\\cli-anything-illustrator.exe\r\n' };
       if (bin === 'claude') return { code: 0, stdout: 'Added' };
-      return { code: 0, stdout: okReply('Adobe 2024') };
+      return { code: 0, stdout: okReply('Adobe 2023') };
     });
     const out = await ensureAdobe({ claudeBin: 'claude', roots: ['C:\\u'], registered: { photoshop: 'C:\\ps.exe' }, exec });
     expect(out.ok).toBe(true);
@@ -90,16 +90,16 @@ describe('ensureAdobe', () => {
   });
 
   it('says to install the connector when it is nowhere on this computer', async () => {
-    const { exec } = fakeExec((bin) => (bin === 'where' ? { code: 1, stdout: '' } : { code: 0, stdout: okReply('Adobe Photoshop 2024') }));
+    const { exec } = fakeExec((bin) => (bin === 'where' ? { code: 1, stdout: '' } : { code: 0, stdout: okReply('Adobe Photoshop 2023') }));
     const out = await ensureAdobe({ claudeBin: 'claude', roots: ['C:\\u'], registered: { photoshop: 'C:\\ps.exe' }, exec });
     expect(out.ok).toBe(false);
-    expect(out.detail).toMatch(/Illustrator 2024 connector \(cli-anything-illustrator\) is not installed/);
+    expect(out.detail).toMatch(/Illustrator 2023 connector \(cli-anything-illustrator\) is not installed/);
   });
 
-  it('reports a missing 2024 app with the connector’s install message', async () => {
-    const { exec } = fakeExec((bin) => (bin.includes('ps') ? { code: 1, stdout: missingReply('Adobe Photoshop 2024') } : { code: 0, stdout: okReply('Adobe Illustrator 2024') }));
+  it('reports a missing 2023 app with the connector’s install message', async () => {
+    const { exec } = fakeExec((bin) => (bin.includes('ps') ? { code: 1, stdout: missingReply('Adobe Photoshop 2023') } : { code: 0, stdout: okReply('Adobe Illustrator 2023') }));
     const out = await ensureAdobe({ claudeBin: 'claude', roots: ['C:\\u'], registered: { photoshop: 'C:\\ps.exe', illustrator: 'C:\\ai.exe' }, exec });
     expect(out.ok).toBe(false);
-    expect(out.detail).toMatch(/Install Adobe Photoshop 2024/);
+    expect(out.detail).toMatch(/Install Adobe Photoshop 2023/);
   });
 });

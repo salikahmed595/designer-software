@@ -2,18 +2,18 @@
  * Adobe readiness for the drawing agent (dev server only, this computer only).
  *
  * The agent draws through two MCP connectors, `photoshop` and `illustrator` (the cli-anything-* programs).
- * Those connectors are pinned to Photoshop 2024 and Illustrator 2024 and never open another version
+ * Those connectors are pinned to Photoshop 2023 and Illustrator 2023 and never open another version
  * (a newer install can ask for a licence key). At startup this module:
  *   1. reads which connectors are registered with Claude Code (~/.claude.json, user scope),
  *   2. registers a missing one automatically (`claude mcp add --scope user …`) when its program is installed,
  *   3. runs `<connector> --json app check`, which reads the registry only and starts nothing,
- * and turns the result into one plain status line ("install Photoshop 2024 …" when it is missing).
+ * and turns the result into one plain status line ("install Photoshop 2023 …" when it is missing).
  */
 import { spawn } from 'node:child_process';
 
 export type AdobeApp = 'photoshop' | 'illustrator';
 export const ADOBE_APPS: readonly AdobeApp[] = ['photoshop', 'illustrator'];
-const LABEL: Record<AdobeApp, string> = { photoshop: 'Photoshop 2024', illustrator: 'Illustrator 2024' };
+const LABEL: Record<AdobeApp, string> = { photoshop: 'Photoshop 2023', illustrator: 'Illustrator 2023' };
 
 export interface AppReadiness { app: AdobeApp; ok: boolean; message: string; registeredNow?: boolean }
 export interface AdobeReadiness { ok: boolean; detail: string; results: AppReadiness[] }
@@ -36,7 +36,7 @@ export function parseCheck(app: AdobeApp, code: number | null, stdout: string): 
 export function adobeSummary(results: AppReadiness[]): { ok: boolean; detail: string } {
   const bad = results.filter((r) => !r.ok);
   if (!bad.length) {
-    return { ok: true, detail: 'Connected: the agent will draw in Photoshop 2024 and Illustrator 2024 on this computer (other versions are never opened).' };
+    return { ok: true, detail: 'Connected: the agent will draw in Photoshop 2023 and Illustrator 2023 on this computer (other versions are never opened).' };
   }
   return { ok: false, detail: `${bad.map((r) => r.message).join(' ')} Then restart the studio app.` };
 }
