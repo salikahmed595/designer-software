@@ -96,3 +96,6 @@ export function sniffType(buf) {
   }
   return null;
 }
+
+/** Windows locks a font file while it is loaded, so re-installing the same font must not copy over it. */
+export const fontNeedsCopy = (installed, incoming) => !(installed && Buffer.isBuffer(installed) && installed.equals(incoming));

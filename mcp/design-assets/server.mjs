@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { assertAllowedUrl, iconSvgUrl, licencePolicy, matchesQuery, parseIconId, resolveSaveDir, safeFileName, sniffType } from './lib.mjs';
+import { assertAllowedUrl, fontNeedsCopy, iconSvgUrl, licencePolicy, matchesQuery, parseIconId, resolveSaveDir, safeFileName, sniffType } from './lib.mjs';
 
 const VERSION = '1.0.0';
 const UA = `lumora-design-assets/${VERSION} (design studio tool)`;
@@ -345,7 +345,12 @@ async function callTool(name, a = {}) {
       const fontsDir = path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), 'Microsoft', 'Windows', 'Fonts');
       await fs.mkdir(fontsDir, { recursive: true });
       const target = path.join(fontsDir, path.basename(file));
-      await fs.copyFile(file, target);
+      const installedBuf = await fs.readFile(target).catch(() => null);
+      const alreadyInstalled = !fontNeedsCopy(installedBuf, buf);
+      if (!alreadyInstalled) {
+        await fs.copyFile(file, target).catch((e) =>
+          fail(e.code === 'EBUSY' || e.code === 'EPERM' ? 'A different font with this file name is installed and in use. Close the apps using it, then try again.' : 'Could not copy the font into the Windows fonts folder.'));
+      }
       const label = `${path.basename(file, path.extname(file))} (${type === 'otf' ? 'OpenType' : 'TrueType'})`;
       await new Promise((resolve, reject) =>
         execFile('reg', ['add', 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts', '/v', label, '/t', 'REG_SZ', '/d', target, '/f'], { windowsHide: true }, (err) => (err ? reject(err) : resolve())),
@@ -356,8 +361,8 @@ async function callTool(name, a = {}) {
         execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ACTIVATE_FONT_PS], { windowsHide: true, timeout: 30_000, env: { ...process.env, DESIGN_ASSETS_FONT_FILE: target } }, (err, stdout) => resolve(err ? 0 : Number(String(stdout).trim().split(/\s+/).pop()) || 0)),
       );
       return {
-        installed: target, for: 'current Windows user only', active_now: loaded > 0,
-        note: loaded > 0 ? 'Photoshop and Illustrator list new fonts only after a restart if they were already open.' : 'Registered, but Windows did not load it into this session: it becomes available after the next sign-in.',
+        installed: target, already_installed: alreadyInstalled, for: 'current Windows user only', active_now: loaded > 0,
+        note: alreadyInstalled && loaded > 0 ? 'Already installed and active: use it for live text.' : loaded > 0 ? 'Photoshop and Illustrator list new fonts only after a restart if they were already open.' : 'Registered, but Windows did not load it into this session: it becomes available after the next sign-in.',
       };
     }
 

@@ -74,3 +74,11 @@ test('a download is checked from its first bytes, not its claimed type', () => {
   assert.equal(sniffType(Buffer.from('<!DOCTYPE html><html>')), null);
   assert.equal(sniffType(Buffer.from('<svg onload="alert(1)"><script>x</script></svg>')), null, 'SVGs with scripts are refused');
 });
+
+test('fontNeedsCopy: skip when the identical font is already installed (Windows locks loaded fonts)', async () => {
+  const { fontNeedsCopy } = await import('./lib.mjs');
+  const a = Buffer.from('font-bytes-1');
+  assert.equal(fontNeedsCopy(null, a), true);
+  assert.equal(fontNeedsCopy(Buffer.from('font-bytes-1'), a), false);
+  assert.equal(fontNeedsCopy(Buffer.from('font-bytes-2'), a), true);
+});
