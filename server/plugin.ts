@@ -11,14 +11,17 @@
  *
  * Runner (env LUMORA_RUNNER): "claude" starts a Claude Code agent that may use only the Photoshop and
  * Illustrator tools plus file tools; "mock" writes a placeholder (tests / demos); "off" only queues.
- * Default: "claude" when the CLI is found (LUMORA_CLAUDE_BIN or `claude` on PATH), otherwise "off".
+ * Default: "claude" when the CLI is found (LUMORA_CLAUDE_BIN or `claude` on PATH) and Photoshop 2024 +
+ * Illustrator 2024 are installed and connected (see ./adobe.ts — no other Adobe version is used), otherwise "off".
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import type { Plugin } from 'vite';
+import { ensureAdobe, readRegisteredServers } from './adobe';
 import {
   DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, REDRAW_BLOCKED_TOOLS, SOURCE_FILES, applySkillChange, buildAgentPrompt,
   buildRedrawPrompt, handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
@@ -140,8 +143,11 @@ export function productionBridge(): Plugin {
     } else if (wanted === 'off') {
       detail = 'The runner is switched off (LUMORA_RUNNER=off). Jobs are saved but not started.';
     } else if ((await runProcess(claudeBin, ['--version'], jobsDir, null, 20_000, null)) === 0) {
-      runner = 'claude';
-      detail = 'Connected: the agent will draw in Photoshop and Illustrator on this computer.';
+      // Claude Code is here: make sure the Photoshop 2024 / Illustrator 2024 connectors are registered and installed.
+      const claudeJson = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => '');
+      const adobe = await ensureAdobe({ claudeBin, roots: [os.homedir(), jobsDir], registered: readRegisteredServers(claudeJson) });
+      runner = adobe.ok ? 'claude' : 'off';
+      detail = adobe.detail;
     } else {
       detail = 'The drawing agent is not set up on this computer yet, so jobs are saved but cannot start. Ask your studio admin — the setup steps are in the README.';
     }
