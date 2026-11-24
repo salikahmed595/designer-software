@@ -4,7 +4,8 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { defaultSkillMap } from '../src/state/production';
-import { fakePsd, installSkill, listSkills, psdLayerCount, psdLayerCountOfFile, readSkillMap, readSkillText, writeSkillMap } from './files';
+import { Readable } from 'node:stream';
+import { fakePsd, installSkill, saveCapped, listSkills, psdLayerCount, psdLayerCountOfFile, readSkillMap, readSkillText, writeSkillMap } from './files';
 
 const reader = (buf: Buffer) => async (pos: number, len: number) => buf.subarray(pos, pos + len);
 
@@ -146,5 +147,24 @@ describe('the skill map file', () => {
     const kept = (await readdir(dir)).filter((f) => f.startsWith('skills.json.broken-'));
     expect(kept).toHaveLength(1);
     expect(await readFile(path.join(dir, kept[0]), 'utf8')).toBe('{ this is not json');
+  });
+});
+
+describe('saving an upload with a size cap (hand-in files)', () => {
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(path.join(os.tmpdir(), 'lumora-upload-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('writes every byte and returns the size', async () => {
+    const file = path.join(dir, 'in.part');
+    const size = await saveCapped(Readable.from([Buffer.from('8BPS'), Buffer.from('rest')]), file, 100);
+    expect(size).toBe(8);
+    expect((await readFile(file)).toString()).toBe('8BPSrest');
+  });
+
+  it('stops at the cap and leaves no partial file behind', async () => {
+    const file = path.join(dir, 'big.part');
+    await expect(saveCapped(Readable.from([Buffer.alloc(60), Buffer.alloc(60)]), file, 100)).rejects.toThrow('too-large');
+    expect(await readdir(dir)).toEqual([]);
   });
 });

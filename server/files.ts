@@ -3,9 +3,11 @@
  *  - how many layers a saved PSD has (a flat PSD is useless to a designer who wants to edit it)
  *  - which skills are installed on this computer (so a typo or missing skill is caught before a job starts)
  */
-import { promises as fs } from 'node:fs';
+import { createWriteStream, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Transform, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { defaultSkillMap, normalizeSkillMap, type SkillMap } from '../src/state/production';
 
 type Reader = (position: number, length: number) => Promise<Buffer>;
@@ -65,6 +67,28 @@ export async function psdLayerCountOfFile(file: string): Promise<number | null> 
     return null;
   } finally {
     await handle?.close();
+  }
+}
+
+/**
+ * Streams an upload to `file`, stopping as soon as it passes `maxBytes` (Error "too-large").
+ * On any failure the partial file is removed, so a broken upload never leaves anything behind.
+ */
+export async function saveCapped(source: Readable, file: string, maxBytes: number): Promise<number> {
+  let size = 0;
+  const cap = new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      size += chunk.length;
+      if (size > maxBytes) done(new Error('too-large'));
+      else done(null, chunk);
+    },
+  });
+  try {
+    await pipeline(source, cap, createWriteStream(file, { flags: 'wx' }));
+    return size;
+  } catch (e) {
+    await fs.rm(file, { force: true });
+    throw e;
   }
 }
 

@@ -4,6 +4,21 @@ import { test, expect, type Page } from '@playwright/test';
 // (LUMORA_RUNNER=mock in playwright.config.ts) so no real agent is ever started.
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+/** A minimal layered PSD (header + layer count only), like the demo runner's. */
+const psd = (layers: number) => {
+  const b = Buffer.alloc(26 + 4 + 4 + 10);
+  b.write('8BPS', 0, 'latin1');
+  b.writeUInt16BE(1, 4);
+  b.writeUInt16BE(3, 12);
+  b.writeUInt32BE(64, 14);
+  b.writeUInt32BE(64, 18);
+  b.writeUInt16BE(8, 22);
+  b.writeUInt16BE(3, 24);
+  b.writeUInt32BE(6, 34);
+  b.writeUInt32BE(2, 38);
+  b.writeInt16BE(layers, 42);
+  return b;
+};
 const h1 = (page: Page, name: RegExp) => page.getByRole('heading', { level: 1, name });
 const noOverflow = async (page: Page) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -204,8 +219,55 @@ test('hand-made: the original + the designer’s changes become a job sheet, wit
   expect(text).toContain(`- Add: ${extra}`);
   expect(text).toContain('- Remove: The small tagline');
   expect(text).toMatch(/## The skill: hand-made/);
+
+  // The designer draws it by hand, then hands in the layered PSD on the same job.
+  await expect(job.getByText('Hand in the finished artwork')).toBeVisible();
+  const drawn = psd(5);
+  await job.getByLabel('Upload layered PSD').setInputFiles({ name: 'emblem-final.psd', mimeType: 'image/vnd.adobe.photoshop', buffer: drawn });
+  const psdLink = job.getByRole('link', { name: /download layered psd/i });
+  await expect(psdLink).toContainText('5 layers');
+  await expect(job).toContainText(/handed in/i);
+  const back = await page.request.get((await psdLink.getAttribute('href'))!);
+  expect(back.status()).toBe(200);
+  expect(Buffer.compare(await back.body(), drawn)).toBe(0);
+  await job.getByLabel('Upload Illustrator file').setInputFiles({ name: 'emblem-final.ai', mimeType: 'application/postscript', buffer: PNG });
+  await expect(job.getByRole('alert')).toHaveText('This is not an Illustrator file (.ai).');
+  await expect(job.getByRole('link', { name: /download illustrator file/i })).toHaveCount(0);
   await noOverflow(page);
   expect(errors).toEqual([]);
+});
+
+test('a hand-in is checked from its real bytes and only hand-made jobs take one', async ({ request }) => {
+  const made = await request.post('/api/production/jobs', {
+    data: { templateId: 'handmade-logo', brief: '', handmadeMode: 'strict', changes: { add: [], remove: [] }, reference: { dataUrl: `data:image/png;base64,${PNG.toString('base64')}`, role: 'Original to redraw' } },
+  });
+  expect(made.status()).toBe(201);
+  const { job } = (await made.json()) as { job: { id: string } };
+  const handIn = (kind: string, data: Buffer, headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }, id = job.id) =>
+    request.post(`/api/production/jobs/${id}/hand-in/${kind}`, { data, headers });
+
+  const flat = await handIn('psd', psd(1));
+  expect(flat.status()).toBe(400);
+  expect(((await flat.json()) as { error: string }).error).toMatch(/flattened/);
+  expect((await handIn('psd', PNG)).status()).toBe(400);
+  expect((await handIn('psd', Buffer.alloc(0))).status()).toBe(400);
+  expect((await handIn('psd', psd(4), { 'Content-Type': 'text/plain' })).status()).toBe(415);
+  expect((await handIn('psd', psd(4), { 'Content-Type': 'application/octet-stream', Origin: 'https://evil.example' })).status()).toBe(403);
+  expect((await handIn('png', psd(4))).status()).toBe(404);
+  expect((await handIn('psd', psd(4), undefined, 'zzzzzzzzzzzz')).status()).toBe(404);
+  expect((await request.get(`/api/production/jobs/${job.id}/files/artwork.psd`)).status()).toBe(404);
+
+  const pdfAi = Buffer.from('%PDF-1.6 % Illustrator test file');
+  const ok = await handIn('ai', pdfAi);
+  expect(ok.status()).toBe(200);
+  expect(((await ok.json()) as { job: { files: string[] } }).job.files).toEqual(['artwork.ai', 'handmade-job-sheet.md']);
+  expect((await (await request.get(`/api/production/jobs/${job.id}/files/artwork.ai`)).body()).toString()).toBe(pdfAi.toString());
+
+  // A normal agent job never takes a hand-in: its files come from the agent and are judged on their own.
+  const agentJob = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `hand-in guard ${Date.now()}`, templateId: 'mascot' } });
+  const { job: other } = (await agentJob.json()) as { job: { id: string } };
+  await expect.poll(async () => ((await (await request.get('/api/production/jobs')).json()) as { jobs: { id: string; status: string }[] }).jobs.find((j) => j.id === other.id)?.status, { timeout: 15000 }).toBe('done');
+  expect((await handIn('psd', psd(4), undefined, other.id)).status()).toBe(409);
 });
 
 test('the skills API refuses bad input and other websites', async ({ request }) => {

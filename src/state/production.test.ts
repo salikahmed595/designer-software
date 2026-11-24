@@ -5,6 +5,7 @@ import {
   ART_STYLES, ART_STYLE_TABS, BUILT_IN_DEFAULT_SKILL, SKILL_NAME, applySkillChange, buildAgentPrompt, canvasFor, filterArtStyles, getArtStyle,
   judgeResult, normalizeSkillMap, parseSkillFile, productionIssues, referencedSkills, skillSlots, skillStatus, skillsFor, validateJobRequest,
   HAND_MADE_SKILL, JOB_SHEET, buildHandmadePrompt, handmadeJobSheet, judgeHandmade,
+  HAND_IN, MAX_HAND_IN_BYTES, handInFileIssue, judgeHandIn,
 } from './production';
 
 describe('hand-made: same design, drawn by a person — never by the agent', () => {
@@ -360,5 +361,51 @@ describe('judging what the agent saved', () => {
     expect(judgeResult({ ...base, reportedOk: false, notes: 'Photoshop was closed.' })).toMatchObject({ status: 'failed', message: 'Photoshop was closed.' });
     expect(judgeResult({ ...base, hasPreview: false, reportedOk: null, notes: null, exitCode: 1 }).message).toMatch(/exit code 1/);
     expect(judgeResult({ ...base, hasPreview: false, reportedOk: null, notes: null, exitCode: null }).message).toMatch(/could not be started or timed out/i);
+  });
+});
+
+describe('handing in the hand-drawn artwork (a designer uploads the finished PSD / AI)', () => {
+  const bytes = (text: string) => new TextEncoder().encode(text);
+  const psdHead = (version: number) => new Uint8Array([0x38, 0x42, 0x50, 0x53, 0, version, 0, 0]);
+
+  it('saves under fixed names only', () => {
+    expect(HAND_IN).toEqual({ psd: 'artwork.psd', ai: 'artwork.ai' });
+  });
+
+  it('checks the chosen file in the browser before uploading: extension, empty, too big', () => {
+    expect(handInFileIssue('psd', 'Emblem FINAL.PSD', 2048)).toBeNull();
+    expect(handInFileIssue('ai', 'emblem.ai', 2048)).toBeNull();
+    expect(handInFileIssue('psd', 'emblem.png', 2048)).toBe('Choose a Photoshop file (.psd).');
+    expect(handInFileIssue('ai', 'emblem.psd', 2048)).toBe('Choose an Illustrator file (.ai).');
+    expect(handInFileIssue('psd', 'emblem.psd', 0)).toBe('That file is empty.');
+    expect(handInFileIssue('psd', 'emblem.psd', MAX_HAND_IN_BYTES + 1)).toMatch(/larger than 1 GB/);
+  });
+
+  it('accepts a layered PSD and reports its layer count', () => {
+    expect(judgeHandIn({ kind: 'psd', size: 5000, head: psdHead(1), psdLayers: 12 })).toEqual({ ok: true, layers: 12 });
+  });
+
+  it('refuses a flattened PSD, because the parts could not be edited', () => {
+    for (const psdLayers of [0, 1]) {
+      const r = judgeHandIn({ kind: 'psd', size: 5000, head: psdHead(1), psdLayers });
+      expect(r).toEqual({ ok: false, error: expect.stringMatching(/flattened/) });
+    }
+  });
+
+  it('refuses a file that is not really a PSD, a PSB, or a PSD it cannot read', () => {
+    expect(judgeHandIn({ kind: 'psd', size: 5000, head: bytes('PNG data'), psdLayers: null })).toEqual({ ok: false, error: 'This is not a Photoshop file (.psd).' });
+    expect(judgeHandIn({ kind: 'psd', size: 5000, head: psdHead(2), psdLayers: null })).toEqual({ ok: false, error: expect.stringMatching(/\.psb/) });
+    expect(judgeHandIn({ kind: 'psd', size: 5000, head: psdHead(1), psdLayers: null })).toEqual({ ok: false, error: expect.stringMatching(/could not be read/) });
+  });
+
+  it('accepts an Illustrator file (PDF-based or older PostScript) and refuses anything else', () => {
+    expect(judgeHandIn({ kind: 'ai', size: 5000, head: bytes('%PDF-1.6 '), psdLayers: null })).toEqual({ ok: true, layers: null });
+    expect(judgeHandIn({ kind: 'ai', size: 5000, head: bytes('%!PS-Adobe-3.0'), psdLayers: null })).toEqual({ ok: true, layers: null });
+    expect(judgeHandIn({ kind: 'ai', size: 5000, head: psdHead(1), psdLayers: null })).toEqual({ ok: false, error: 'This is not an Illustrator file (.ai).' });
+  });
+
+  it('refuses empty and oversized uploads on the server too', () => {
+    expect(judgeHandIn({ kind: 'ai', size: 0, head: new Uint8Array(), psdLayers: null })).toEqual({ ok: false, error: 'That file is empty.' });
+    expect(judgeHandIn({ kind: 'psd', size: MAX_HAND_IN_BYTES + 1, head: psdHead(1), psdLayers: 9 })).toEqual({ ok: false, error: expect.stringMatching(/larger than 1 GB/) });
   });
 });

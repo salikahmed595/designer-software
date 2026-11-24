@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import { CATEGORIES, HOME_POPULAR, TEMPLATES } from './state/catalog';
@@ -8,7 +8,7 @@ import { ART_STYLES, applySkillChange, normalizeSkillMap, parseSkillFile, type I
 import { hasArt, indexThumbnails } from './glass/Thumb';
 
 type Runner = 'claude' | 'off';
-interface StubOptions { jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string }
+interface StubOptions { jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string; rejectHandIn?: string }
 
 const SHIPPED = normalizeSkillMap(shipped)!;
 const ALL_INSTALLED = ['2d-artwork-photoshop-illustrator', '2d-pfp', '2dvector-photoshop-illustrator-salik', 'hand-made', 'vtuber-master'];
@@ -17,6 +17,7 @@ const ALL_INSTALLED = ['2d-artwork-photoshop-illustrator', '2d-pfp', '2dvector-p
 function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {}) {
   const posted: unknown[] = [];
   const skillCalls: { path: string; body: unknown }[] = [];
+  const handIns: { url: string; contentType: string | undefined; body: unknown }[] = [];
   const jobs: unknown[] = [...(opts.jobs ?? [])];
   let map: SkillMap = structuredClone(SHIPPED);
   const installed: InstalledSkill[] = (opts.installed ?? ALL_INSTALLED).map((name) => ({ name, description: `About ${name}` }));
@@ -47,6 +48,17 @@ function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {
       }
       return json({ ...state(), added: parsed.name }, 201);
     }
+    const handIn = /\/jobs\/([a-z0-9]+)\/hand-in\/(psd|ai)$/.exec(url);
+    if (handIn && init?.method === 'POST') {
+      handIns.push({ url, contentType: (init.headers as Record<string, string> | undefined)?.['Content-Type'], body: init.body });
+      if (opts.rejectHandIn) return json({ error: opts.rejectHandIn }, 400);
+      const job = jobs.find((j) => (j as { id: string }).id === handIn[1]) as { files: string[]; layers: number | null; handedInAt?: number } | undefined;
+      if (!job) return json({ error: 'Not found.' }, 404);
+      job.files = [...new Set([`artwork.${handIn[2]}`, ...job.files])];
+      if (handIn[2] === 'psd') job.layers = 7;
+      job.handedInAt = 1_700_000_000_000;
+      return json({ job });
+    }
     if (url.endsWith('/jobs') && init?.method === 'POST') {
       if (opts.rejectPost) return json({ error: opts.rejectPost }, 409);
       const body = JSON.parse(String(init.body));
@@ -54,9 +66,9 @@ function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {
       jobs.unshift({ id: 'abc123abc123', createdAt: 1, status: 'queued', styleName: 'Cinematic PFP', skills: [{ name: '2d-pfp', role: 'style' }], ratio: body.ratio, templateTitle: 'Gaming Avatar', briefExcerpt: body.brief, runner, message: null, hasPreview: false, files: [], layers: null });
       return json({ job: jobs[0] }, 201);
     }
-    return json({ jobs });
+    return json({ jobs: structuredClone(jobs) }); // a real fetch returns new objects every time
   }));
-  return { posted, skillCalls, currentMap: () => map };
+  return { posted, skillCalls, handIns, currentMap: () => map };
 }
 
 beforeEach(() => window.localStorage.clear());
@@ -359,6 +371,55 @@ describe('Hand-made: the client’s own design, redrawn by a person with no AI',
     expect(within(job).getByRole('link', { name: /download job sheet/i })).toHaveAttribute('href', '/api/production/jobs/cccccccccccc/files/handmade-job-sheet.md');
     expect(within(job).queryByRole('link', { name: /psd/i })).not.toBeInTheDocument();
     expect(job).toHaveTextContent(/hand-made/i);
+  });
+
+  describe('handing in the finished, hand-drawn artwork', () => {
+    const sheetOnly = () => ({
+      id: 'dddddddddddd', createdAt: 4, status: 'done', styleName: 'Matches the original', ratio: 'Auto', templateTitle: 'Hand-made Logo', briefExcerpt: 'Exact copy of the client’s original',
+      runner: 'claude', message: 'Job sheet ready.', hasPreview: false, files: ['handmade-job-sheet.md'], layers: null, skills: [{ name: 'hand-made', role: 'artwork' }], handmade: 'strict',
+    });
+    const openJob = async (user: ReturnType<typeof userEvent.setup>) => {
+      await openJobs(user);
+      return within(await screen.findByRole('list', { name: 'Jobs' })).getByRole('listitem');
+    };
+
+    it('uploads the layered PSD as the file itself, then offers it for download with its layer count', async () => {
+      const { user, handIns } = setup('claude', { jobs: [sheetOnly()] });
+      const job = await openJob(user);
+      expect(within(job).getByText(/hand in the finished artwork/i)).toBeInTheDocument();
+      const psd = new File([new Uint8Array([0x38, 0x42, 0x50, 0x53])], 'logo-final.psd', { type: '' });
+      await user.upload(within(job).getByLabelText('Upload layered PSD'), psd);
+      expect(await within(job).findByRole('link', { name: /download layered psd/i })).toHaveAttribute('href', '/api/production/jobs/dddddddddddd/files/artwork.psd');
+      expect(job).toHaveTextContent('7 layers');
+      expect(handIns).toEqual([{ url: '/api/production/jobs/dddddddddddd/hand-in/psd', contentType: 'application/octet-stream', body: psd }]);
+      expect(within(job).getByText(/handed in/i)).toBeInTheDocument();
+      expect(within(job).getByLabelText('Replace layered PSD')).toBeInTheDocument();
+      expect(within(job).getByLabelText('Upload Illustrator file')).toBeInTheDocument();
+    });
+
+    it('says what is wrong with a wrong file before uploading anything', async () => {
+      const { user, handIns } = setup('claude', { jobs: [sheetOnly()] });
+      const job = await openJob(user);
+      fireEvent.change(within(job).getByLabelText('Upload Illustrator file'), { target: { files: [new File(['x'], 'logo.png', { type: 'image/png' })] } });
+      expect(await within(job).findByRole('alert')).toHaveTextContent('Choose an Illustrator file (.ai).');
+      expect(handIns).toHaveLength(0);
+    });
+
+    it('shows the server’s reason when it refuses the file', async () => {
+      const { user } = setup('claude', { jobs: [sheetOnly()], rejectHandIn: 'This PSD has only one layer — it was flattened.' });
+      const job = await openJob(user);
+      await user.upload(within(job).getByLabelText('Upload layered PSD'), new File(['8BPS'], 'flat.psd'));
+      expect(await within(job).findByRole('alert')).toHaveTextContent(/flattened/);
+      expect(within(job).queryByRole('link', { name: /download layered psd/i })).not.toBeInTheDocument();
+    });
+
+    it('is offered only on hand-made jobs', async () => {
+      const agentJob = { ...sheetOnly(), handmade: undefined, files: ['artwork.psd'], layers: 9, templateTitle: 'Gaming Avatar' };
+      const { user } = setup('claude', { jobs: [agentJob] });
+      const job = await openJob(user);
+      expect(within(job).queryByText(/hand in the finished artwork/i)).not.toBeInTheDocument();
+      expect(within(job).queryByLabelText(/upload/i)).not.toBeInTheDocument();
+    });
   });
 
   it('on the Skills screen, hand-made types fall back to the hand-made skill, not the default', async () => {

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { getTemplate } from '../state/catalog';
 import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS } from '../state/flow';
 import {
-  ART_STYLES, JOB_SHEET, getArtStyle, productionIssues, ratioLabel, skillsFor, type BridgeHealth, type JobView, type SkillMap, type SkillRole, type SkillUse,
+  ART_STYLES, HAND_IN, JOB_SHEET, getArtStyle, handInFileIssue, productionIssues, ratioLabel, skillsFor,
+  type BridgeHealth, type HandInKind, type JobView, type SkillMap, type SkillRole, type SkillUse,
 } from '../state/production';
 import { IconCheck, IconClose, IconPlus } from '../components/icons';
 import { ChoiceCheck, GuidedStepper, rise } from './ui';
@@ -48,6 +49,8 @@ export interface Bridge {
   activeJobs: number;
   refresh: () => Promise<void>;
   send: (job: unknown) => Promise<void>;
+  /** hand-made jobs: upload the artwork the designer drew */
+  handIn: (id: string, kind: HandInKind, file: File) => Promise<void>;
 }
 
 /** Talks to the local production bridge: health once, jobs on a slow poll while any job is active. */
@@ -84,7 +87,12 @@ export function useProductionBridge(): Bridge {
     await refresh();
   }, [refresh]);
 
-  return { health, jobs, activeJobs, refresh, send };
+  const handIn = useCallback(async (id: string, kind: HandInKind, file: File) => {
+    await api(`jobs/${id}/hand-in/${kind}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+    await refresh();
+  }, [refresh]);
+
+  return { health, jobs, activeJobs, refresh, send, handIn };
 }
 
 /** Shown only when something needs attention; a healthy connection gets a quiet one-line confirmation. */
@@ -292,6 +300,56 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
   );
 }
 
+const HAND_IN_LABEL: Record<HandInKind, { upload: string; replace: string; accept: string }> = {
+  psd: { upload: 'Upload layered PSD', replace: 'Replace layered PSD', accept: '.psd' },
+  ai: { upload: 'Upload Illustrator file', replace: 'Replace Illustrator file', accept: '.ai' },
+};
+
+/** Hand-made jobs: the designer uploads what they drew, so the finished files live with the job. */
+function HandIn({ job, onHandIn }: { job: JobView; onHandIn: Bridge['handIn'] }) {
+  const [busy, setBusy] = useState<HandInKind | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pick = async (kind: HandInKind, input: HTMLInputElement) => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    const issue = handInFileIssue(kind, file.name, file.size);
+    if (issue) return setError(issue);
+    setError(null);
+    setBusy(kind);
+    try {
+      await onHandIn(job.id, kind, file);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The upload did not finish. Try again.');
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="hand-in">
+      <p className="hand-in-title">Hand in the finished artwork</p>
+      <p className="hand-in-note">
+        {job.handedInAt
+          ? <>Handed in {new Date(job.handedInAt).toLocaleString()}. Upload again to replace a file.</>
+          : 'When the designer has drawn it, upload the layered PSD and/or the Illustrator file here.'}
+      </p>
+      <div className="hand-in-buttons">
+        {(Object.keys(HAND_IN) as HandInKind[]).map((kind) => {
+          const label = job.files.includes(HAND_IN[kind]) ? HAND_IN_LABEL[kind].replace : HAND_IN_LABEL[kind].upload;
+          return (
+            <label key={kind} className={`btn btn-sm ${busy === kind ? 'is-busy' : ''}`}>
+              <input type="file" className="sr-only" accept={HAND_IN_LABEL[kind].accept} aria-label={label} disabled={busy !== null} onChange={(e) => void pick(kind, e.currentTarget)} />
+              {busy === kind ? 'Uploading…' : label}
+            </label>
+          );
+        })}
+      </div>
+      {busy && <p className="sr-only" role="status">Uploading…</p>}
+      {error && <p className="hand-in-error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
 /** Step 3 — what is being drawn, and the finished artwork. */
 export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
   const { jobs, health, refresh } = bridge;
@@ -340,6 +398,7 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
                     )}
                   </div>
                 )}
+                {j.handmade && j.status === 'done' && <HandIn job={j} onHandIn={bridge.handIn} />}
                 <p className="job-meta">
                   {j.handmade && <>Hand-made — a designer draws it{j.handmade === 'agent' ? ' (AI-assisted element list)' : ' (no AI)'} · </>}
                   {jobSkills(j).length > 0 && <>{j.handmade ? 'Checklist from' : 'Drawn with'} {jobSkills(j).map((s, k) => <span key={s.name}>{k > 0 && ' + '}<code>{s.name}</code></span>)} · </>}

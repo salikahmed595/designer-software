@@ -4,7 +4,8 @@
  *   POST /api/production/jobs          create a job → saved to <jobs>/<id>/, queued for the agent
  *   GET  /api/production/jobs          list jobs with status
  *   GET  /api/production/jobs/:id/preview   the exported preview.png
- *   GET  /api/production/jobs/:id/files/artwork.psd|artwork.ai   the layered source, as a download
+ *   GET  /api/production/jobs/:id/files/artwork.psd|artwork.ai|handmade-job-sheet.md   a download
+ *   POST /api/production/jobs/:id/hand-in/psd|ai   hand-made jobs: the designer uploads the artwork they drew
  *   GET  /api/production/health        which runner is active
  *   GET  /api/production/skills        whether each skill named in production/skills.json is installed
  *
@@ -19,12 +20,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import {
-  DOWNLOAD_FILES, HAND_MADE_SKILL, JOB_SHEET, SOURCE_FILES, applySkillChange, buildAgentPrompt, buildHandmadePrompt, handmadeJobSheet,
-  judgeHandmade, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
-  type BridgeHealth, type DownloadFile, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
+  DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, SOURCE_FILES, applySkillChange, buildAgentPrompt, buildHandmadePrompt, handmadeJobSheet,
+  judgeHandIn, judgeHandmade, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
+  type BridgeHealth, type DownloadFile, type HandInKind, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
 } from '../src/state/production';
 import {
-  fakePsd, installSkill, listSkills, psdLayerCountOfFile, readSkillMap, readSkillText, skillDirs, skillInstallDir, writeSkillMap,
+  fakePsd, installSkill, listSkills, psdLayerCountOfFile, readSkillMap, readSkillText, saveCapped, skillDirs, skillInstallDir, writeSkillMap,
 } from './files';
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -367,7 +368,51 @@ export function productionBridge(): Plugin {
     return send(res, 201, { job: view });
   }
 
+  /**
+   * A designer hands in the artwork they drew for a hand-made job. The body is the file itself
+   * (application/octet-stream, which other websites can't send without asking first). It is saved to a
+   * temporary file, checked from its real bytes, and only then moved to its fixed name.
+   */
+  async function handIn(req: IncomingMessage, res: ServerResponse, id: string, kind: HandInKind): Promise<void> {
+    const job = jobs.get(id);
+    if (!job) return send(res, 404, { error: 'That job is not there.' });
+    if (!job.handmade) return send(res, 409, { error: 'Only hand-made jobs take a hand-in. The agent saves the files for other jobs.' });
+    if (job.status !== 'done') return send(res, 409, { error: 'This job’s sheet is not ready yet.' });
+    if ((req.headers['content-type'] ?? '').split(';')[0].trim() !== 'application/octet-stream') return send(res, 415, { error: 'Send the file itself.' });
+    if (Number(req.headers['content-length'] ?? 0) > MAX_HAND_IN_BYTES) return send(res, 413, { error: 'That file is larger than 1 GB.' });
+
+    const out = path.join(job.dir, 'output');
+    const temp = path.join(out, `.hand-in-${randomBytes(6).toString('hex')}.part`);
+    let size: number;
+    try {
+      size = await saveCapped(req, temp, MAX_HAND_IN_BYTES);
+    } catch (e) {
+      const tooLarge = e instanceof Error && e.message === 'too-large';
+      return send(res, tooLarge ? 413 : 400, { error: tooLarge ? 'That file is larger than 1 GB.' : 'The upload did not finish. Try again.' });
+    }
+    try {
+      const head = Buffer.alloc(16);
+      const handle = await fs.open(temp, 'r');
+      await handle.read(head, 0, 16, 0).finally(() => handle.close());
+      const verdict = judgeHandIn({ kind, size, head, psdLayers: kind === 'psd' ? await psdLayerCountOfFile(temp) : null });
+      if (!verdict.ok) return send(res, 400, { error: verdict.error });
+      const name = HAND_IN[kind];
+      await fs.rename(temp, path.join(out, name));
+      await update(id, {
+        files: DOWNLOAD_FILES.filter((f) => f === name || job.files.includes(f)),
+        ...(kind === 'psd' ? { layers: verdict.layers } : {}),
+        handedInAt: Date.now(),
+      });
+      const { dir: _dir, ...view } = job;
+      return send(res, 200, { job: view });
+    } finally {
+      await fs.rm(temp, { force: true });
+    }
+  }
+
   async function handleFiles(req: IncomingMessage, res: ServerResponse, route: string): Promise<void> {
+    const handInRoute = /^jobs\/([a-z0-9]+)\/hand-in\/(psd|ai)$/.exec(route);
+    if (req.method === 'POST' && handInRoute && JOB_ID.test(handInRoute[1])) return handIn(req, res, handInRoute[1], handInRoute[2] as HandInKind);
     const preview = /^jobs\/([a-z0-9]+)\/preview$/.exec(route);
     if (req.method === 'GET' && preview && JOB_ID.test(preview[1])) {
       const job = jobs.get(preview[1]);

@@ -246,6 +246,46 @@ export type SourceFile = (typeof SOURCE_FILES)[number];
 export const DOWNLOAD_FILES = [...SOURCE_FILES, JOB_SHEET] as const;
 export type DownloadFile = (typeof DOWNLOAD_FILES)[number];
 
+/* ---------- hand-in: the designer uploads the artwork they drew for a hand-made job ---------- */
+
+/** A hand-in is always saved under one of these fixed names — the uploaded file's own name never reaches the disk. */
+export const HAND_IN = { psd: 'artwork.psd', ai: 'artwork.ai' } as const;
+export type HandInKind = keyof typeof HAND_IN;
+export const MAX_HAND_IN_BYTES = 1024 * 1024 * 1024;
+const HAND_IN_TOO_BIG = 'That file is larger than 1 GB. Save a copy without hidden or unused layers.';
+const HAND_IN_EXT: Record<HandInKind, { ext: string; wrong: string }> = {
+  psd: { ext: '.psd', wrong: 'Choose a Photoshop file (.psd).' },
+  ai: { ext: '.ai', wrong: 'Choose an Illustrator file (.ai).' },
+};
+
+/** Browser-side check of the chosen file, so a wrong pick is explained before anything is uploaded. */
+export function handInFileIssue(kind: HandInKind, name: string, size: number): string | null {
+  if (!name.toLowerCase().endsWith(HAND_IN_EXT[kind].ext)) return HAND_IN_EXT[kind].wrong;
+  if (size <= 0) return 'That file is empty.';
+  if (size > MAX_HAND_IN_BYTES) return HAND_IN_TOO_BIG;
+  return null;
+}
+
+const startsWith = (head: Uint8Array, text: string) => head.length >= text.length && [...text].every((c, i) => head[i] === c.charCodeAt(0));
+
+/**
+ * Server-side check of an uploaded file, from its real bytes (never its name).
+ * A PSD must be a real, readable, layered PSD; an .ai must be an Illustrator (PDF- or PostScript-based) file.
+ */
+export function judgeHandIn(o: { kind: HandInKind; size: number; head: Uint8Array; psdLayers: number | null }): { ok: true; layers: number | null } | { ok: false; error: string } {
+  const fail = (error: string) => ({ ok: false as const, error });
+  if (o.size <= 0) return fail('That file is empty.');
+  if (o.size > MAX_HAND_IN_BYTES) return fail(HAND_IN_TOO_BIG);
+  if (o.kind === 'ai') {
+    return startsWith(o.head, '%PDF-') || startsWith(o.head, '%!PS-Adobe') ? { ok: true, layers: null } : fail('This is not an Illustrator file (.ai).');
+  }
+  if (!startsWith(o.head, '8BPS')) return fail('This is not a Photoshop file (.psd).');
+  if (o.head[4] !== 0 || o.head[5] !== 1) return fail('This is a large-document file (.psb). Save it as a .psd.');
+  if (o.psdLayers === null) return fail('This PSD could not be read. Save it again from Photoshop and upload it again.');
+  if (o.psdLayers < 2) return fail('This PSD has only one layer — it was flattened, so the parts could not be edited. Save it with its layers.');
+  return { ok: true, layers: o.psdLayers };
+}
+
 /** What the page shows for one job. */
 export interface JobView {
   id: string;
@@ -263,6 +303,8 @@ export interface JobView {
   files: DownloadFile[];
   /** hand-made jobs: how the job sheet was made (missing on older jobs) */
   handmade?: HandmadeMode | null;
+  /** hand-made jobs: when the designer last uploaded the finished artwork */
+  handedInAt?: number | null;
   /** layer count read from artwork.psd, when there is one */
   layers: number | null;
 }
