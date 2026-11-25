@@ -9,8 +9,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_CONCEPT_ATTEMPTS, type Verdict } from '../src/state/orchestration';
 import type { ProductionJob } from '../src/state/production';
-import { mockConcept, mockCreate, mockPng, mockVerify, type MockCreatorOptions } from './mock-runner';
-import { createOrchestrator, type CreatorRun, type OrchestratorDeps, type VerifierRun } from './orchestrator';
+import { mockConcept, mockCreate, mockPng, mockReviewFinal, mockVerify, type MockCreatorOptions } from './mock-runner';
+import { createOrchestrator, type CreatorRun, type FinalReviewRun, type OrchestratorDeps, type VerifierRun } from './orchestrator';
+import type { FinalReviewReply } from '../src/state/quality';
 
 const JOB: ProductionJob = {
   styleId: 'anime-cel', styleName: 'Anime cel', handmade: null, skills: [{ name: '2d-pfp', role: 'style' }], ratio: 'Square', canvas: { width: 2000, height: 2000 },
@@ -48,10 +49,15 @@ function setup(over: Partial<OrchestratorDeps> & { creator?: MockCreatorOptions 
       verifierRuns.push(run);
       return mockVerify(run);
     },
+    reviewFinal: async (run) => {
+      reviewRuns.push(run);
+      return mockReviewFinal(run);
+    },
     ...over,
   };
-  return { orch: createOrchestrator(deps), creatorRuns, verifierRuns, conceptCalls, deps };
+  return { orch: createOrchestrator(deps), creatorRuns, verifierRuns, conceptCalls, reviewRuns, deps };
 }
+const reviewRuns: FinalReviewRun[] = [];
 
 const state = (o: ReturnType<typeof setup>['orch'], id: string) => o.get(id)?.orchestration?.state;
 const readJson = async (f: string) => JSON.parse(await fs.readFile(f, 'utf8'));
@@ -59,6 +65,7 @@ const readJson = async (f: string) => JSON.parse(await fs.readFile(f, 'utf8'));
 beforeEach(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'lumora-orch-'));
   now = 1_700_000_000_000;
+  reviewRuns.length = 0;
 });
 afterEach(() => fs.rm(tmp, { recursive: true, force: true }));
 
@@ -305,6 +312,106 @@ describe('stages → verification → final review → export', () => {
     expect(fox.stages.sketch.status).toBe('passed'); // approved work is protected
     expect(state(s.orch, id)).toBe('FINAL_REVIEW');
     expect(s.orch.get(id)!.orchestration!.history.map((h) => h.to)).toContain('STAGE_CORRECTING');
+  });
+
+  it('the final art reviewer sees the finished preview, the brief, the concept and the asset list; the server scores it', async () => {
+    reviewRuns.length = 0;
+    const s = setup();
+    const id = await toConceptReview(s);
+    await s.orch.approveConcept(id, 1);
+    await s.orch.idle();
+    expect(s.reviewRuns).toHaveLength(1);
+    const r = s.reviewRuns[0];
+    expect(r.preview).toBe(path.join(r.paths.production, 'output', 'preview.png'));
+    expect(r.brief).toBe(JOB.brief);
+    expect(r.concept).toMatch(/concept-v1\.png$/);
+    expect(r.assets.map((a) => a.id)).toEqual(['background', 'fox']);
+    expect(r.references).toEqual([]);
+    const o = s.orch.get(id)!.orchestration!;
+    expect(o.state).toBe('FINAL_REVIEW');
+    expect(o.history.at(-1)!.reason).toMatch(/score 100/i);
+    const log = (await fs.readFile(path.join(r.paths.logs, 'final_review.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
+    expect(log[0]).toMatchObject({ run: 1, pass: true, score: 100 });
+  });
+
+  it('a final review below the bar is never shown for approval: the responsible stage is corrected, then reviewed again', async () => {
+    reviewRuns.length = 0;
+    let first = true;
+    const s = setup({
+      reviewFinal: async (run) => {
+        reviewRuns.push(run);
+        const ok = await mockReviewFinal(run);
+        if (!first || !ok.ok) return ok;
+        first = false;
+        const review: FinalReviewReply = {
+          ...ok.review, scores: { ...ok.review.scores, anatomy: 3, line_shape: 4 },
+          defects: ['[major] fox head: built from three stacked ellipses. Expected: custom Bezier head shape. Fix: redraw the head contour'],
+          targets: [{ asset: 'fox', stage: 'line_art', defect: '[major] fox head: built from three stacked ellipses. Expected: custom Bezier head shape. Fix: redraw the head contour' }],
+        };
+        return { ok: true, review };
+      },
+    });
+    const id = await toConceptReview(s);
+    await s.orch.approveConcept(id, 1);
+    await s.orch.idle();
+    expect(s.creatorRuns).toHaveLength(2);
+    const second = await readJson(path.join(s.creatorRuns[1].paths.production, 'job.json'));
+    expect(second.corrections.join(' ')).toContain('three stacked ellipses');
+    const fox = second.registry.find((a: { id: string }) => a.id === 'fox');
+    expect(fox.stages.sketch.status).toBe('passed'); // earlier approved work is protected
+    expect(fox.stages.line_art.status).toBe('executing'); // reopened and redone in this run
+    expect(fox.stages.line_art.defects.join(' ')).toContain('three stacked ellipses');
+    expect(fox.stages.color_fill.status).toBe('executing'); // invalidated, so redone too
+    expect(second.registry.find((a: { id: string }) => a.id === 'background').stages.line_art.status).toBe('passed');
+    const o = s.orch.get(id)!.orchestration!;
+    expect(o.history.map((h) => h.to)).toContain('STAGE_CORRECTING');
+    expect(o.history.find((h) => h.to === 'STAGE_CORRECTING')!.reason).toMatch(/final art review/i);
+    expect(o.state).toBe('FINAL_REVIEW');
+    expect(s.reviewRuns).toHaveLength(2);
+  });
+
+  it('a failed review with no traceable stage still goes back to correction with the reasons', async () => {
+    reviewRuns.length = 0;
+    let first = true;
+    const s = setup({
+      reviewFinal: async (run) => {
+        const ok = await mockReviewFinal(run);
+        if (!first || !ok.ok) return ok;
+        first = false;
+        return { ok: true, review: { ...ok.review, gates: { ...ok.review.gates, exact_text: false } } };
+      },
+    });
+    const id = await toConceptReview(s);
+    await s.orch.approveConcept(id, 1);
+    await s.orch.idle();
+    const second = await readJson(path.join(s.creatorRuns[1].paths.production, 'job.json'));
+    expect(second.corrections.join(' ')).toMatch(/exact_text/);
+    expect(state(s.orch, id)).toBe('FINAL_REVIEW');
+  });
+
+  it('when the final reviewer cannot run, a human is asked — the artwork is never passed unreviewed', async () => {
+    const s = setup({ reviewFinal: async () => ({ ok: false, error: 'The final reviewer did not answer.' }) });
+    const id = await toConceptReview(s);
+    await s.orch.approveConcept(id, 1);
+    await s.orch.idle();
+    const o = s.orch.get(id)!.orchestration!;
+    expect(o.state).toBe('HUMAN_INTERVENTION_REQUIRED');
+    expect(o.blocker).toMatch(/final reviewer did not answer/i);
+    expect(o.finalCandidate).toBeNull();
+  });
+
+  it('gives the reviewer the studio’s professional references for the style and artwork type when they exist', async () => {
+    const refs = path.join(tmp, 'references');
+    await fs.mkdir(path.join(refs, 'anime-cel'), { recursive: true });
+    await fs.mkdir(path.join(refs, 'pfp'), { recursive: true });
+    await fs.writeFile(path.join(refs, 'anime-cel', 'pro-1.png'), mockPng(64, 64));
+    await fs.writeFile(path.join(refs, 'pfp', 'pro-2.jpg'), 'jpg');
+    await fs.writeFile(path.join(refs, 'anime-cel', 'notes.txt'), 'not an image');
+    const s = setup({ referencesDir: refs });
+    const id = await toConceptReview(s);
+    await s.orch.approveConcept(id, 1);
+    await s.orch.idle();
+    expect(s.reviewRuns.at(-1)!.references.sort()).toEqual([path.join(refs, 'anime-cel', 'pro-1.png'), path.join(refs, 'pfp', 'pro-2.jpg')].sort());
   });
 
   it('missing evidence blocks and asks a human; resuming runs again', async () => {

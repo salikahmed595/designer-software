@@ -12,6 +12,7 @@ import { ART_STYLES, type ArtStyle } from './styles';
 import { PLAN_LIMITS, parsePlan, type DesignPlan } from './plan';
 import type { Orchestration } from './orchestration';
 import { engineOf, parseEngine, type Engine, type EngineId } from './engines';
+import { CRAFT_RULES } from './quality';
 
 export { ART_STYLES, type ArtStyle };
 
@@ -530,12 +531,15 @@ export function buildOrchestratedPrompt(job: ProductionJob, productionDir: strin
     `4. Start from a blank native document at ${size} (or open your own saved master from ${dir}/output/ when correcting). Use one group per asset with subgroups 01 Sketch … 07 Color Grading.`,
     `5. For every asset in the registry, in order, run the seven stages ${STAGE_NAMES} (ids: ${STAGE_IDS}). Skip stages job.json marks passed. For each stage:`,
     `   a. do the stage with native tools on named layers; b. save an editable checkpoint copy to ${dir}/checkpoints/<asset id>/<stage>/${n}/ (.psd or .ai);`,
-    `   c. export a canvas capture to ${dir}/evidence/<asset id>/<stage>/${n}/capture.png;`,
-    `   d. write ${dir}/stages/<asset id>/<stage>.json: {"status": "passed", "checkpoint": "checkpoints/<asset id>/<stage>/${n}/<file>", "captures": ["evidence/<asset id>/<stage>/${n}/capture.png"], "notes": "what you did"}`,
+    `   c. export a canvas capture to ${dir}/evidence/<asset id>/<stage>/${n}/capture.png and a zoomed crop of the detailed area to capture-detail.png beside it; Read both and fix what is wrong before reporting (a stage that only rendered is not done);`,
+    `   d. write ${dir}/stages/<asset id>/<stage>.json: {"status": "passed", "checkpoint": "checkpoints/<asset id>/<stage>/${n}/<file>", "captures": ["evidence/<asset id>/<stage>/${n}/capture.png", "evidence/<asset id>/<stage>/${n}/capture-detail.png"], "references": ["what you studied for this asset"], "self_check": "what you checked in the captures and fixed", "notes": "what you did"}`,
     '      — or {"status": "not_applicable", "reason": "why this stage is genuinely not needed for this asset (e.g. flat vector: no texture)"} — or {"status": "failed", "reason": "the exact unsupported operation or problem"}.',
     '   Never mark a stage done that you did not do. A stage marked not_applicable needs a real reason. The server checks the files and an independent verifier inspects the captures.',
     `6. Assemble the complete artwork, then save the layered source files to ${dir}/output/: ${sourceNote(job.madeIn, e)} Export a flattened preview to ${dir}/output/preview.png.`,
     `7. Finish by writing ${dir}/output/result.json: {"ok": true, "files": [...], "layers": [...], "notes": "..."} — or {"ok": false, "reason": "..."}.`,
+    '',
+    'Drawing rules for every asset, whatever the subject (the verifier rejects work that breaks them):',
+    ...CRAFT_RULES.map((r) => `- ${r}`),
     '',
     ...appNotes(e),
     '',

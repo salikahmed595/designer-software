@@ -164,14 +164,56 @@ describe('stage evidence → registry (spec §8, §9)', () => {
     expect(r[0].stages.sketch.reason).toMatch(/same defect/i);
     expect(registrySummary(r)).toBe('blocked');
 
+    // Improving every time (fewer defects each attempt), so only the correction limit stops it.
     let many = applyStageReports(reg(), { fox: { sketch: passed('sketch') } });
     for (let i = 0; i <= MAX_STAGE_CORRECTIONS; i++) {
-      many = applyVerdicts(many, [{ asset: 'fox', stage: 'sketch', pass: false, defects: [`defect ${i}`] }]);
+      many = applyVerdicts(many, [{ asset: 'fox', stage: 'sketch', pass: false, defects: Array.from({ length: MAX_STAGE_CORRECTIONS + 2 - i }, (_, k) => `defect ${i}.${k}`) }]);
       if (many[0].stages.sketch.status === 'blocked') break;
       many = applyStageReports(many, { fox: { sketch: passed('sketch') } });
     }
     expect(many[0].stages.sketch.status).toBe('blocked');
     expect(many[0].stages.sketch.reason).toMatch(/corrections/);
+  });
+
+  it('two corrections in a row that do not reduce the critical/major defects escalate early (spec §9)', () => {
+    let r = applyStageReports(reg(), { fox: { sketch: passed('sketch') } });
+    const fail = (defects: string[]) => {
+      r = applyVerdicts(r, [{ asset: 'fox', stage: 'sketch', pass: false, defects }]);
+      if (r[0].stages.sketch.status !== 'blocked') r = applyStageReports(r, { fox: { sketch: passed('sketch') } });
+    };
+    fail(['[major] hand: thumb on the wrong side', '[major] face: eyes uneven']);
+    expect(r[0].stages.sketch.status).toBe('verifying');
+    fail(['[major] hand: fingers too short', '[major] face: jaw too wide']); // not better
+    expect(r[0].stages.sketch.status).toBe('verifying');
+    fail(['[major] hand: palm too small', '[major] hair: one flat shape', '[minor] ear slightly high']); // still not better
+    expect(r[0].stages.sketch.status).toBe('blocked');
+    expect(r[0].stages.sketch.reason).toMatch(/not improv/i);
+  });
+
+  it('minor defects do not count as no-improvement, and an improving stage keeps correcting', () => {
+    let r = applyStageReports(reg(), { fox: { sketch: passed('sketch') } });
+    for (const defects of [['[major] a', '[major] b', '[major] c'], ['[major] d', '[major] e'], ['[major] f']]) {
+      r = applyVerdicts(r, [{ asset: 'fox', stage: 'sketch', pass: false, defects }]);
+      expect(r[0].stages.sketch.status).toBe('correcting');
+      r = applyStageReports(r, { fox: { sketch: passed('sketch') } });
+    }
+  });
+
+  it('a "pass" that still lists a critical or major defect is not a pass', () => {
+    const v = applyVerdicts(applyStageReports(reg(), { fox: { sketch: passed('sketch') } }), [{ asset: 'fox', stage: 'sketch', pass: true, defects: ['[major] cat built from three ellipses'] }]);
+    expect(v[0].stages.sketch.status).toBe('correcting');
+    const minor = applyVerdicts(applyStageReports(reg(), { fox: { sketch: passed('sketch') } }), [{ asset: 'fox', stage: 'sketch', pass: true, defects: ['[minor] one star a bit large'] }]);
+    expect(minor[0].stages.sketch.status).toBe('passed');
+  });
+
+  it('the correction limit is configurable', () => {
+    let r = applyStageReports(reg(), { fox: { sketch: passed('sketch') } });
+    r = applyVerdicts(r, [{ asset: 'fox', stage: 'sketch', pass: false, defects: ['[major] a', '[major] b'] }], { maxCorrections: 1 });
+    expect(r[0].stages.sketch.status).toBe('correcting');
+    r = applyStageReports(r, { fox: { sketch: passed('sketch') } });
+    r = applyVerdicts(r, [{ asset: 'fox', stage: 'sketch', pass: false, defects: ['[major] c'] }], { maxCorrections: 1 });
+    expect(r[0].stages.sketch.status).toBe('blocked');
+    expect(r[0].stages.sketch.reason).toMatch(/1 correction/);
   });
 
   it('a stage that already passed ignores a new claim (approved work is protected)', () => {
@@ -187,6 +229,18 @@ describe('independent verifier reply', () => {
   it('reads verdicts from the CLI result', () => {
     const out = readVerifierReply(line('Here: {"verdicts":[{"asset":"fox","stage":"sketch","pass":true,"defects":[]},{"asset":"fox","stage":"bogus","pass":true}]}'));
     expect(out).toEqual({ ok: true, verdicts: [{ asset: 'fox', stage: 'sketch', pass: true, defects: [] }] });
+  });
+  it('reads structured defects (severity, where, expected, fix) as tagged lines; untagged ones count as major', () => {
+    const out = readVerifierReply(line(JSON.stringify({ verdicts: [{ asset: 'fox', stage: 'line_art', pass: false, defects: [
+      { severity: 'critical', region: 'left ear, x 400-460 y 120-200', problem: 'contour open', expected: 'closed tapered contour', fix: 'join the two end anchors' },
+      'uniform 3 px stroke everywhere',
+    ] }] })));
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.verdicts[0].defects).toEqual([
+      '[critical] left ear, x 400-460 y 120-200: contour open. Expected: closed tapered contour. Fix: join the two end anchors',
+      '[major] uniform 3 px stroke everywhere',
+    ]);
   });
   it('fails closed on anything unreadable', () => {
     expect(readVerifierReply('nothing').ok).toBe(false);

@@ -47,11 +47,14 @@ The app enforces `skill/universal-artwork-production-agent/SKILL.md` for every j
    - Final QA hashes every file in `production/` and refuses the job if a byte copy of any concept is found.
 4. **Asset registry and 7 stages.** The approved plan becomes the asset registry (`plans/asset_registry.json`). For every asset the agent does Sketch, Line Art, Color Fill, Texture, Shadows & Highlights, Effects and Color Grading, and for each stage it writes a native checkpoint, a capture and a report (`production/stages/<asset>/<stage>.json`). The server checks the files. A separate, read-only verifier run (no connectors, no write tools) then judges each stage from the captures. The outcomes:
    - a failed stage gets a targeted correction run;
-   - the same defect twice, or more than 6 attempts, blocks the stage and asks a human;
+   - the same defect twice, two corrections in a row that do not reduce the critical/major defects, or more than 6 corrections (`LUMORA_MAX_STAGE_CORRECTIONS`, 1–20) blocks the stage and asks a human;
+   - a stage passes only with no critical or major defect; defects come back as `[severity] region: problem. Expected: … Fix: …` and the correction run gets exactly those;
    - an earlier failure invalidates the later stages;
    - "not applicable" needs a reason and the verifier's approval.
+   The drawing agent gets the universal craft rules (`src/state/quality.ts`: custom Bezier construction, reference-driven sketch, tapered variable line weight, one light source, per-asset design) and must Read a full capture and a zoomed crop after every stage. A render alone is never a pass.
    The Jobs screen shows each asset's seven statuses (pending / executing / verifying / correcting / passed / not_applicable_verified / blocked / invalidated) with checkpoint and evidence paths.
-5. **Final approval and export.** Final QA hashes the master files into one version id. The designer approves that exact version or sends it back with notes. Only then are the files copied to `exports/` with `final_report.json` (approvals, stages, history, AI disclosure). Downloads serve only exported files. If a file changed after approval, nothing is exported.
+5. **Final art review.** After the file checks, a separate read-only reviewer compares the finished art with the brief, the approved concept and the professional reference set (`production/references/<style or artwork id>/`, or `LUMORA_REFERENCES_DIR`; up to 8 images). It scores the 10-criterion rubric and the hard gates (exact text, size, all assets, brief must-haves/must-nots, organic construction). The **server** computes the score. Below 95/100, a failed gate or any critical/major defect reopens the named asset stages for correction. If the reviewer cannot run, the job asks a human. Results are in `logs/final_review.jsonl`.
+6. **Final approval and export.** Final QA hashes the master files into one version id. The designer approves that exact version or sends it back with notes. Only then are the files copied to `exports/` with `final_report.json` (approvals, stages, history, AI disclosure). Downloads serve only exported files. If a file changed after approval, nothing is exported.
 
 Restarts: a job that was running when the app stopped is marked "Interrupted" and waits for **Resume**. **Cancel** stops the agent.
 

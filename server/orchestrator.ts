@@ -20,7 +20,7 @@ import path from 'node:path';
 import {
   MAX_CONCEPT_ATTEMPTS, STAGES, applyStageReports, applyVerdicts, approveConcept as approveConceptRule, approveFinal as approveFinalRule,
   buildRegistry, conceptPrompt, conceptQa, markExecuting, newOrchestration, openAiSize, openDefects, pngSize, registrySummary,
-  styleContractFor, transition, unblock, viewStatus,
+  reopenStages, styleContractFor, transition, unblock, viewStatus,
   type Actor, type CheckedReport, type ConceptQa, type JobState, type Orchestration, type Stage, type StyleContract, type Verdict,
 } from '../src/state/orchestration';
 import {
@@ -32,6 +32,7 @@ import { appFor, engineOf, type EngineId } from '../src/state/engines';
 import { psdLayerCountOfFile } from './files';
 import { findConceptCopies, guardConfig, jobPaths, productionMcpConfig, productionSettings, sha256File, type JobPaths } from './gate';
 import type { ConceptImage } from './openai';
+import { judgeFinalReview, type FinalReviewReply } from '../src/state/quality';
 
 export type StoredJobData = Omit<ProductionJob, 'reference'> & { reference: { file: string; ext: string; role: string } | null };
 
@@ -47,6 +48,20 @@ export interface VerifierRun {
   concept: string | null;
 }
 
+/** The final art review of the assembled artwork (spec §13). Paths are absolute. */
+export interface FinalReviewRun {
+  jobId: string; paths: JobPaths; run: number; signal: AbortSignal;
+  /** the flattened finished artwork */
+  preview: string;
+  /** the last capture of each asset (its latest stage), for detail */
+  details: string[];
+  size: string; text: string; brief: string; contract: StyleContract | null;
+  assets: Array<{ id: string; name: string; app: string; detail: string }>;
+  concept: string | null;
+  /** designer-approved professional reference artwork for this style / artwork type (may be empty) */
+  references: string[];
+}
+
 export interface OrchestratorDeps {
   jobsDir: string;
   now?: () => number;
@@ -60,6 +75,12 @@ export interface OrchestratorDeps {
   critiqueConcept?: (r: { file: string; contract: StyleContract | null; jobId: string }) => Promise<ConceptQa & { description?: string | null }>;
   runCreator: (run: CreatorRun) => Promise<{ exitCode: number | null; account: string | null }>;
   runVerifier: (run: VerifierRun) => Promise<{ ok: true; verdicts: Verdict[] } | { ok: false; error: string }>;
+  /** the read-only final art reviewer; the server scores its reply. Required: nothing reaches final review unreviewed */
+  reviewFinal: (run: FinalReviewRun) => Promise<{ ok: true; review: FinalReviewReply } | { ok: false; error: string }>;
+  /** folder of designer-approved professional references: <dir>/<style id>/ and <dir>/<artwork type id>/ (images) */
+  referencesDir?: string;
+  /** corrections per stage before a human is asked (default 6) */
+  maxStageCorrections?: number;
   /** skill names that are not installed (production is refused while any is missing) */
   missingSkills?: (names: string[]) => Promise<string[]>;
   /** null when the job's drawing apps are connected, else why not (production then waits for a human) */
@@ -364,7 +385,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
       : { ok: true as const, verdicts: [] };
     rec.abort = null;
     if (cancelled(rec)) return;
-    registry = applyVerdicts(registry, verdict.ok ? verdict.verdicts : []);
+    registry = applyVerdicts(registry, verdict.ok ? verdict.verdicts : [], { maxCorrections: deps.maxStageCorrections });
     rec.o = { ...rec.o, registry };
     await fs.appendFile(path.join(p.logs, 'verification.jsonl'), `${JSON.stringify({ run, at: now(), items: items.length, ok: verdict.ok, error: verdict.ok ? null : verdict.error, verdicts: verdict.ok ? verdict.verdicts : [] })}\n`);
     await writeJson(path.join(p.plans, 'asset_registry.json'), registry);
@@ -404,16 +425,71 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     const candidate: Array<{ name: string; sha256: string }> = [];
     for (const f of CANDIDATE_FILES) if (await has(f)) candidate.push({ name: f, sha256: await sha256File(path.join(out, f)) });
     const version = createHash('sha256').update(candidate.map((c) => `${c.name}:${c.sha256}`).join('\n')).digest('hex');
+
+    // The final art review: a separate read-only reviewer judges the finished artwork; the server scores it.
+    // A file that exists or rendered is never enough to reach the designer.
+    const review = await reviewFinalArt(rec, run, lockedVersion.file);
+    if (cancelled(rec)) return;
+    if (!review.ok) return escalate(rec, `The final art review could not run, so the artwork was not passed: ${review.error}`, 'STAGE_CORRECTING');
+    const verdictFinal = judgeFinalReview(review.review);
+    await fs.appendFile(path.join(p.logs, 'final_review.jsonl'), `${JSON.stringify({ run, at: now(), version, pass: verdictFinal.pass, score: verdictFinal.score, reasons: verdictFinal.reasons, ...review.review })}\n`);
+    const scoreText = verdictFinal.score === null ? 'no score' : `score ${verdictFinal.score}/100`;
+    if (!verdictFinal.pass) {
+      const reopened = reopenStages(rec.o.registry, review.review.targets);
+      const traced = new Set(review.review.targets.map((t) => t.defect));
+      rec.o = { ...rec.o, registry: reopened };
+      await writeJson(path.join(p.plans, 'asset_registry.json'), reopened);
+      const corrections = [
+        `Final art review (${scoreText}) failed: ${verdictFinal.reasons.join(' ')}`,
+        ...openDefects(reopened),
+        ...review.review.defects.filter((d) => !traced.has(d)).map((d) => `Whole artwork: ${d}`),
+      ];
+      return correct(rec, corrections, run, `Final art review failed (${scoreText}): ${verdictFinal.reasons.slice(0, 2).join(' ')}`);
+    }
+
     rec.layers = judged.layers;
     rec.hasPreview = true;
     rec.o = { ...rec.o, finalCandidate: { version, files: candidate, createdAt: now() }, corrections: [] };
-    move(rec, 'FINAL_REVIEW', 'server', `Final QA passed: version ${version.slice(0, 12)}`, candidate.map((c) => `production/output/${c.name}`));
+    move(rec, 'FINAL_REVIEW', 'server', `Final QA and final art review passed (${scoreText}, compared with ${review.review.comparedWith.join(', ')}): version ${version.slice(0, 12)}`, [...candidate.map((c) => `production/output/${c.name}`), 'logs/final_review.jsonl']);
     await save(rec);
   }
 
-  async function correct(rec: Rec, corrections: string[], run: number): Promise<void> {
+  /** Images in <referencesDir>/<style id>/ and <referencesDir>/<artwork type id>/ (designer-approved examples). */
+  async function referenceFiles(job: StoredJobData): Promise<string[]> {
+    if (!deps.referencesDir) return [];
+    const out: string[] = [];
+    for (const id of [job.styleId, job.templateId]) {
+      if (typeof id !== 'string' || !/^[a-z0-9-]+$/.test(id)) continue;
+      const dir = path.join(deps.referencesDir, id);
+      const names = await fs.readdir(dir).catch(() => [] as string[]);
+      for (const n of names.sort()) if (/\.(png|jpe?g|webp)$/i.test(n)) out.push(path.join(dir, n));
+    }
+    return out.slice(0, 8);
+  }
+
+  async function reviewFinalArt(rec: Rec, run: number, conceptFile: string) {
+    const p = rec.paths;
+    const engine = engineOf(rec.job.engine);
+    const abs = (rel: string) => path.join(p.production, rel);
+    const details = rec.o.registry.flatMap((a) => {
+      const last = [...STAGES].reverse().find((s) => a.stages[s].evidence.length > 0);
+      return last ? a.stages[last].evidence.map(abs) : [];
+    }).slice(0, 12);
+    const size = rec.job.canvas ? `${rec.job.canvas.width} × ${rec.job.canvas.height} px` : 'the standard size for this artwork type';
+    rec.abort = new AbortController();
+    const result = await deps.reviewFinal({
+      jobId: rec.id, paths: p, run, signal: rec.abort.signal, preview: path.join(p.output, 'preview.png'), details, size,
+      text: rec.job.text, brief: rec.job.brief, contract: rec.o.styleContract,
+      assets: rec.o.registry.map((a) => ({ id: a.id, name: a.name, app: appFor(engine.id, a.app), detail: a.detail })),
+      concept: path.join(p.root, conceptFile), references: await referenceFiles(rec.job),
+    });
+    rec.abort = null;
+    return result;
+  }
+
+  async function correct(rec: Rec, corrections: string[], run: number, reason?: string): Promise<void> {
     if (run >= maxRuns) return escalate(rec, `Still not passing after ${run} production runs: ${corrections.slice(0, 3).join(' · ')}`, 'STAGE_CORRECTING');
-    move(rec, 'STAGE_CORRECTING', 'server', `${corrections.length} finding(s) to correct`);
+    move(rec, 'STAGE_CORRECTING', 'server', reason ?? `${corrections.length} finding(s) to correct`);
     rec.o = { ...rec.o, corrections };
     await save(rec);
     enqueue(rec);

@@ -41,7 +41,8 @@ import { combineReadiness, engineRefusal, type EnginesReadiness } from './readin
 import { ENGINES, engineOf } from '../src/state/engines';
 import { runProcess } from './process';
 import { openAiKeyStatus, realDeps } from './agents';
-import { mockConcept, mockCreate, mockVerify } from './mock-runner';
+import { mockConcept, mockCreate, mockReviewFinal, mockVerify } from './mock-runner';
+import { maxStageCorrections } from '../src/state/quality';
 import { createOrchestrator } from './orchestrator';
 import { forbidsAi } from '../src/state/orchestration';
 import { ensureDesignAssets } from './assets';
@@ -132,6 +133,8 @@ export function productionBridge(): Plugin {
   /** AI-assisted jobs: the master orchestration decides every step, from files and verdicts. */
   const orch = createOrchestrator({
     jobsDir,
+    referencesDir: path.resolve(process.env.LUMORA_REFERENCES_DIR ?? 'production/references'),
+    maxStageCorrections: maxStageCorrections(process.env),
     canRun: () => runner !== 'off',
     runnerKind: () => runner,
     claudeJson: () => fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => ''),
@@ -143,7 +146,7 @@ export function productionBridge(): Plugin {
       return names.filter((n) => skillStatus(n, have) === 'missing');
     },
     ...(mockRunner
-      ? { generateConcept: (r) => mockConcept(r), runCreator: (r) => mockCreate(r), runVerifier: (r) => mockVerify(r) }
+      ? { generateConcept: (r) => mockConcept(r), runCreator: (r) => mockCreate(r), runVerifier: (r) => mockVerify(r), reviewFinal: (r) => mockReviewFinal(r) }
       : realDeps({ env: process.env, claudeBin, appDir: process.cwd(), skillDirs })),
   });
 

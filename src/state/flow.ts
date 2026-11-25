@@ -50,6 +50,8 @@ export interface FlowState {
   notice: string | null;
   /** Claude's design plan and the brief it was made for (never saved on the device) */
   plan: { plan: DesignPlan; forBrief: string } | null;
+  /** the real length of a pasted brief that did not fit (its end was cut off); null when it fits */
+  briefOverflow: number | null;
 }
 
 export type FlowAction =
@@ -91,7 +93,7 @@ export function cleanChanges(raw: unknown): string[] {
     .slice(0, MAX_CHANGES);
 }
 
-export const initialFlow = (): FlowState => ({ page: 'home', brief: emptyBrief(), referencePreview: null, showErrors: false, notice: null, plan: null });
+export const initialFlow = (): FlowState => ({ page: 'home', brief: emptyBrief(), referencePreview: null, showErrors: false, notice: null, plan: null, briefOverflow: null });
 
 /** Everything Claude planned from: if any of it changes, the plan is out of date. */
 export const briefSignature = (b: Brief): string =>
@@ -117,7 +119,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
     case 'setArtStyle':
       return patch(state, { artStyleId: action.artStyleId });
     case 'setPrompt':
-      return patch(state, { prompt: action.prompt.slice(0, MAX_BRIEF_CHARS) });
+      return { ...patch(state, { prompt: action.prompt.slice(0, MAX_BRIEF_CHARS) }), briefOverflow: action.prompt.length > MAX_BRIEF_CHARS ? action.prompt.length : null };
     case 'setDisplayName':
       return patch(state, { displayName: action.name.slice(0, MAX_TEXT) });
     case 'setReference':

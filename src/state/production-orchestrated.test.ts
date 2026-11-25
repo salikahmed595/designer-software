@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ORCHESTRATION_SKILL, buildOrchestratedPrompt, withOrchestration, type ProductionJob } from './production';
+import { CRAFT_RULES } from './quality';
 
 const job: ProductionJob = {
   styleId: 'anime-cel', styleName: 'Anime cel', handmade: null, skills: [{ name: '2d-pfp', role: 'style' }], ratio: 'Wide', canvas: { width: 1920, height: 1080 },
@@ -36,6 +37,16 @@ describe('the orchestrated production prompt', () => {
     expect(prompt).toContain('checkpoints/<asset id>/<stage>/2/');
     expect(prompt).toContain('evidence/<asset id>/<stage>/2/capture.png');
     expect(prompt).toMatch(/not_applicable.*reason/);
+  });
+
+  it('gives every run the universal drawing rules (custom Bezier construction, no primitives for organic forms)', () => {
+    for (const rule of CRAFT_RULES) expect(prompt).toContain(rule);
+  });
+
+  it('asks the creator to look at its capture after every stage and report what it checked and which references it used', () => {
+    expect(prompt).toMatch(/"self_check"/);
+    expect(prompt).toMatch(/"references"/);
+    expect(prompt).toMatch(/only rendered is not done/);
   });
 
   it('never inlines the client brief (it is data in job.json)', () => {

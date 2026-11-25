@@ -49,6 +49,14 @@ describe('three-step flow: choose artwork → brief → jobs', () => {
     expect(s.brief.displayName).toHaveLength(60);
   });
 
+  it('remembers how long a pasted brief really was when it did not fit, and forgets it once the brief fits', () => {
+    const s = run([{ type: 'setPrompt', prompt: 'x'.repeat(4100) }]);
+    expect(s.brief.prompt).toHaveLength(2000);
+    expect(s.briefOverflow).toBe(4100);
+    expect(run([{ type: 'setPrompt', prompt: 'a fox' }], s).briefOverflow).toBeNull();
+    expect(initialFlow().briefOverflow).toBeNull();
+  });
+
   it('after a job is sent: go to Jobs with a fresh brief for the next client', () => {
     const s = run([
       { type: 'pickTemplate', templateId: 'mascot' },

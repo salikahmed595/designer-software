@@ -187,6 +187,22 @@ describe('step 2 — the brief', () => {
     expect(screen.getByText('2d-pfp')).toBeInTheDocument();
   });
 
+  it('catches a pasted brief that was cut off at the limit and will not plan or draw from it', async () => {
+    const { user } = setup();
+    await openBrief(user);
+    await user.click(screen.getByRole('radio', { name: /cinematic pfp/i }));
+    const box = screen.getByLabelText(/paste the client’s brief/i);
+    await user.click(box);
+    await user.paste('x'.repeat(2100));
+    expect(screen.getByRole('alert')).toHaveTextContent(/2,100 characters.*2,000 fit.*last 100 were cut off/i);
+    expect(screen.getByRole('list', { name: 'Checklist' })).toHaveTextContent(/client brief\s*cut off/i);
+    await user.click(screen.getByRole('button', { name: /plan with claude|send to production/i }));
+    expect(screen.queryByText(/claude is planning/i)).not.toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, 'A calm samurai on a rooftop');
+    expect(screen.queryByText(/were cut off/i)).not.toBeInTheDocument();
+  });
+
   it('shows which dedicated skills will draw it, and promises editable layered files', async () => {
     const { user } = setup();
     await openBrief(user);

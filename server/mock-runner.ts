@@ -9,7 +9,8 @@ import path from 'node:path';
 import { deflateSync, crc32 } from 'node:zlib';
 import { STAGES, stageDone, type AssetRecord, type Stage, type Verdict } from '../src/state/orchestration';
 import { fakePsd } from './files';
-import type { CreatorRun, VerifierRun } from './orchestrator';
+import type { CreatorRun, FinalReviewRun, VerifierRun } from './orchestrator';
+import { HARD_GATES, RUBRIC, type FinalReviewReply } from '../src/state/quality';
 
 /** A real RGB PNG (gradient), so the concept checks and the browser can read it. */
 export function mockPng(width: number, height: number, seed = 0): Buffer {
@@ -89,6 +90,20 @@ export async function mockCreate(run: CreatorRun, opts: MockCreatorOptions = {})
   await write('output/result.json', JSON.stringify({ ok: true, files: ['artwork.psd'], notes: 'Demo runner — placeholder files. No artwork was made.' }));
   await opts.after?.(run);
   return { exitCode: 0, account: null };
+}
+
+/**
+ * Demo final reviewer: full marks and every gate, so the demo flow reaches final review. Its record says "demo"
+ * (comparedWith includes "demo-runner"); it is never used with real drawing apps. Tests pass their own to fail it.
+ */
+export async function mockReviewFinal(_run: FinalReviewRun): Promise<{ ok: true; review: FinalReviewReply }> {
+  return {
+    ok: true,
+    review: {
+      scores: Object.fromEntries(RUBRIC.map((r) => [r.id, r.weight])), notApplicable: {}, gates: Object.fromEntries(HARD_GATES.map((g) => [g.id, true])),
+      defects: [], targets: [], comparedWith: ['brief', 'concept', 'demo-runner'],
+    },
+  };
 }
 
 /** Passes everything it is shown (demo); tests pass their own verifier to fail stages. */

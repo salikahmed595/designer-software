@@ -3,6 +3,7 @@ import { getTemplate } from '../state/catalog';
 import { ENGINES, ENGINE_IDS, type EngineId } from '../state/engines';
 import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS, planStatus } from '../state/flow';
 import { parsePlan, type DesignPlan } from '../state/plan';
+import { briefIssues } from '../state/quality';
 import { PlanPanel } from './PlanPanel';
 import { OrchestratedJob, type Act } from './Orchestration';
 import {
@@ -144,6 +145,9 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
   /** Claude plans first whenever an agent can run; without one, the job is only saved, so there is no plan step. */
   const canPlan = canRun;
   const briefDone = brief.prompt.trim() !== '';
+  // Validate the brief before any artwork: a brief cut off at the limit loses what the client asked for.
+  const briefProblem = state.briefOverflow !== null ? briefIssues(brief.prompt, MAX_BRIEF_CHARS, state.briefOverflow)[0] ?? null : null;
+  const briefCut = briefProblem !== null;
   const referenceDone = !brief.referenceName || Boolean(brief.referenceRole);
   /** each pair of drawing apps as the bridge sees it (an older bridge says nothing: assume usable) */
   const engineState = (id: EngineId) => bridge.health?.engines?.[id] ?? null;
@@ -198,7 +202,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
 
   const submit = async () => {
     setError(null);
-    if (issues.length > 0 || !style) return dispatch({ type: 'showErrors' });
+    if (issues.length > 0 || !style || briefCut) return dispatch({ type: 'showErrors' });
     if (canRun && !pickedUsable) return setError(`${engine.label} is not connected: ${engineState(brief.engine)?.detail ?? ''}`.trim());
     if (canPlan && plan !== 'current') return void makePlan();
     let approved: DesignPlan | null = null;
@@ -221,7 +225,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
   const checklist: [string, boolean, string][] = [
     ['Artwork', true, template.title],
     ['Art style', Boolean(style), style?.name ?? 'Not chosen yet'],
-    ['Client brief', briefDone, briefDone ? 'Written' : 'Not written yet'],
+    ['Client brief', briefDone && !briefCut, briefCut ? 'Cut off — shorten it' : briefDone ? 'Written' : 'Not written yet'],
     ['Reference', referenceDone, brief.referenceName ? (brief.referenceRole ?? 'Say how to use it') : 'None (optional)'],
     ['Size', true, ratioLabel(brief.ratio)],
     ['Drawing apps', pickedUsable, engine.label],
@@ -276,14 +280,14 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
               id="client-brief"
               className="field"
               rows={6}
-              maxLength={MAX_BRIEF_CHARS}
               value={brief.prompt}
               onChange={(e) => dispatch({ type: 'setPrompt', prompt: e.target.value })}
               placeholder={`e.g. ${template.promptHint}`}
-              aria-invalid={(tried && !briefDone) || undefined}
-              aria-describedby={tried && !briefDone ? 'brief-error' : 'brief-help'}
+              aria-invalid={(tried && !briefDone) || briefCut || undefined}
+              aria-describedby={briefCut ? 'brief-cut' : tried && !briefDone ? 'brief-error' : 'brief-help'}
             />
-            {tried && !briefDone && <p id="brief-error" role="alert" className="field-error">Write the client brief.</p>}
+            {briefCut && <p id="brief-cut" role="alert" className="field-error">{briefProblem}</p>}
+            {!briefCut && tried && !briefDone && <p id="brief-error" role="alert" className="field-error">Write the client brief.</p>}
             <label htmlFor="display-name" className="sub-label">{template.nameLabel} <span className="optional">(optional)</span></label>
             <input id="display-name" className="field" maxLength={MAX_TEXT} value={brief.displayName} onChange={(e) => dispatch({ type: 'setDisplayName', name: e.target.value })} placeholder="e.g. NightWolf" />
           </div>

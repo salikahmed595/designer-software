@@ -9,6 +9,7 @@
  * The server owns every transition; the drawing agent can only hand in evidence, which the server checks.
  * Only the designer can approve (concept, final) and only the designer can cancel or resume a blocked job.
  */
+import { isBlocking, jsonObjectIn, normaliseDefect, readCliResult } from './quality';
 
 export const JOB_STATES = [
   'BRIEF_PENDING', 'ART_DIRECTION_READY', 'CONCEPT_GENERATING', 'CONCEPT_QA', 'CONCEPT_REVIEW', 'CONCEPT_APPROVED',
@@ -105,6 +106,8 @@ export interface StageRecord {
   evidence: string[];
   /** open defects from the independent verifier */
   defects: string[];
+  /** critical + major defect count of each failed verdict, oldest first (to see whether corrections improve it) */
+  serious?: number[];
 }
 export interface AssetRecord {
   id: string;
@@ -409,8 +412,19 @@ export function applyStageReports(registry: AssetRecord[], reports: Record<strin
 
 const sameDefects = (a: string[], b: string[]) => a.length > 0 && a.length === b.length && a.every((x, i) => x.trim().toLowerCase() === b[i].trim().toLowerCase());
 
-/** Apply the independent verifier's verdicts to every stage that is waiting for one. */
-export function applyVerdicts(registry: AssetRecord[], verdicts: Verdict[]): AssetRecord[] {
+/** Two corrections in a row with no fewer critical/major defects than before = not improving (spec §9). */
+const notImproving = (serious: number[]): boolean => {
+  const k = serious.length;
+  return k >= 3 && serious[k - 1] >= serious[k - 2] && serious[k - 2] >= serious[k - 3];
+};
+
+/**
+ * Apply the independent verifier's verdicts to every stage that is waiting for one. A "pass" that still lists a
+ * critical or major defect is a fail. A stage is escalated to a human when the same defects come back, when two
+ * corrections in a row do not reduce its critical/major defects, or after `maxCorrections` corrections.
+ */
+export function applyVerdicts(registry: AssetRecord[], verdicts: Verdict[], opts: { maxCorrections?: number } = {}): AssetRecord[] {
+  const limit = opts.maxCorrections ?? MAX_STAGE_CORRECTIONS;
   return registry.map((asset) => {
     let a = asset;
     STAGES.forEach((stage, i) => {
@@ -421,18 +435,22 @@ export function applyVerdicts(registry: AssetRecord[], verdicts: Verdict[]): Ass
         a = withStage(a, stage, { status: 'blocked', reason: 'The independent verifier gave no verdict for this stage.' });
         return;
       }
-      if (v.pass) {
+      const blocking = v.defects.filter(isBlocking);
+      if (v.pass && blocking.length === 0) {
         a = withStage(a, stage, { status: rec.checkpoint ? 'passed' : 'not_applicable_verified', defects: [] });
         return;
       }
       const defects = v.defects.length > 0 ? v.defects : ['The verifier rejected this stage without details.'];
       const attempt = rec.attempt + 1;
+      const serious = [...(rec.serious ?? []), Math.max(defects.filter(isBlocking).length, 1)];
       if (sameDefects(defects, rec.defects)) {
-        a = withStage(a, stage, { status: 'blocked', attempt, defects, reason: `The same defect came back twice: ${defects[0]}` });
-      } else if (attempt > MAX_STAGE_CORRECTIONS) {
-        a = withStage(a, stage, { status: 'blocked', attempt, defects, reason: `Still failing after ${MAX_STAGE_CORRECTIONS} corrections.` });
+        a = withStage(a, stage, { status: 'blocked', attempt, defects, serious, reason: `The same defect came back twice: ${defects[0]}` });
+      } else if (notImproving(serious)) {
+        a = withStage(a, stage, { status: 'blocked', attempt, defects, serious, reason: `Not improving: two corrections in a row did not reduce the critical/major defects (${serious.slice(-3).join(' → ')}).` });
+      } else if (attempt > limit) {
+        a = withStage(a, stage, { status: 'blocked', attempt, defects, serious, reason: `Still failing after ${limit} correction${limit === 1 ? '' : 's'}.` });
       } else {
-        a = withStage(a, stage, { status: 'correcting', attempt, defects });
+        a = withStage(a, stage, { status: 'correcting', attempt, defects, serious });
       }
       // An earlier stage is wrong: everything built on it must be redone.
       for (const later of STAGES.slice(i + 1)) {
@@ -440,6 +458,27 @@ export function applyVerdicts(registry: AssetRecord[], verdicts: Verdict[]): Ass
         if (stageDone(s) || s === 'verifying') a = withStage(a, later, { status: 'invalidated' });
       }
     });
+    return a;
+  });
+}
+
+/**
+ * The final art review traced defects to an asset and the earliest responsible stage: that stage goes back to
+ * correction with the defect, and every later stage of the asset is invalidated. Unknown assets are ignored here
+ * (the orchestrator still passes their defects on as plain corrections).
+ */
+export function reopenStages(registry: AssetRecord[], targets: Array<{ asset: string; stage: Stage; defect: string }>): AssetRecord[] {
+  return registry.map((asset) => {
+    const mine = targets.filter((t) => t.asset === asset.id);
+    if (mine.length === 0) return asset;
+    let a = asset;
+    const earliest = Math.min(...mine.map((t) => STAGES.indexOf(t.stage)));
+    for (const [i, stage] of STAGES.entries()) {
+      if (i < earliest) continue;
+      const here = mine.filter((t) => t.stage === stage).map((t) => t.defect);
+      if (here.length > 0) a = withStage(a, stage, { status: 'correcting', attempt: a.stages[stage].attempt + 1, defects: here });
+      else if (i > earliest) a = withStage(a, stage, { status: 'invalidated' });
+    }
     return a;
   });
 }
@@ -473,33 +512,17 @@ export const openDefects = (registry: AssetRecord[]): string[] =>
 
 /** The verifier's reply from `claude -p --output-format json`. Anything unreadable fails closed. */
 export function readVerifierReply(cliOutput: string): { ok: true; verdicts: Verdict[] } | { ok: false; error: string } {
-  let result: string | null = null;
-  for (const line of cliOutput.split(/\r?\n/)) {
-    if (!line.trim().startsWith('{')) continue;
-    try {
-      const j = JSON.parse(line) as { type?: unknown; is_error?: unknown; result?: unknown };
-      if (j.type === 'result' && typeof j.result === 'string' && j.is_error !== true) result = j.result;
-    } catch {
-      /* not the result line */
-    }
-  }
+  const result = readCliResult(cliOutput);
   if (result === null) return { ok: false, error: 'The verifier did not answer.' };
-  const start = result.indexOf('{');
-  const end = result.lastIndexOf('}');
-  let raw: unknown = null;
-  try {
-    raw = start >= 0 && end > start ? JSON.parse(result.slice(start, end + 1)) : null;
-  } catch {
-    raw = null;
-  }
-  const list = raw && typeof raw === 'object' && Array.isArray((raw as { verdicts?: unknown }).verdicts) ? (raw as { verdicts: unknown[] }).verdicts : null;
+  const raw = jsonObjectIn(result);
+  const list = raw && Array.isArray(raw.verdicts) ? (raw.verdicts as unknown[]) : null;
   if (!list) return { ok: false, error: 'The verifier’s reply had no verdicts.' };
   const verdicts: Verdict[] = [];
   for (const item of list) {
     const v = (item ?? {}) as Record<string, unknown>;
     const stage = STAGES.find((s) => s === v.stage);
     if (typeof v.asset !== 'string' || !stage || typeof v.pass !== 'boolean') continue;
-    const defects = (Array.isArray(v.defects) ? v.defects : []).filter((d): d is string => typeof d === 'string' && d.trim() !== '').map((d) => d.trim().slice(0, 300)).slice(0, 10);
+    const defects = (Array.isArray(v.defects) ? v.defects : []).map(normaliseDefect).filter((d): d is string => d !== null).slice(0, 10);
     verdicts.push({ asset: v.asset, stage, pass: v.pass, defects });
   }
   return { ok: true, verdicts };
