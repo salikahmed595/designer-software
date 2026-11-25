@@ -367,7 +367,7 @@ async function callTool(name, a = {}) {
       );
       return {
         installed: target, already_installed: alreadyInstalled, for: 'current Windows user only', active_now: loaded > 0,
-        adobe: 'Photoshop 2023 and Illustrator 2022 on this computer only list fonts installed for all users, so a font installed here may not be usable for live text yet. Try it: Illustrator text_add fails with "Font not found"; check Photoshop text in the exported preview. If it is not listed, use a bold font the apps already have (e.g. Arial Black, Impact) and say so in your notes.',
+        adobe: 'Illustrator 2022 can use this font for live text (checked on this computer). Photoshop 2023 does not list fonts installed for one user, so for Photoshop text use a font it already has (e.g. Arial Black, Impact), or set the title in Illustrator. Check text in the exported preview.',
         note: alreadyInstalled && loaded > 0 ? 'Already installed and active: use it for live text.' : loaded > 0 ? 'Photoshop and Illustrator list new fonts only after a restart if they were already open.' : 'Registered, but Windows did not load it into this session: it becomes available after the next sign-in.',
       };
     }
