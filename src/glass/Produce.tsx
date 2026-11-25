@@ -3,6 +3,7 @@ import { getTemplate } from '../state/catalog';
 import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS, planStatus } from '../state/flow';
 import { parsePlan, type DesignPlan } from '../state/plan';
 import { PlanPanel } from './PlanPanel';
+import { OrchestratedJob, type Act } from './Orchestration';
 import {
   ART_STYLES, HAND_IN, JOB_SHEET, getArtStyle, handInFileIssue, productionIssues, ratioLabel, skillsFor,
   type BridgeHealth, type HandInKind, type HandmadeMode, type JobView, type SkillMap, type SkillRole, type SkillUse,
@@ -14,8 +15,8 @@ import type { PageProps } from './pages';
 
 const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'Production is offline. Start the studio app with “npm run dev” on the computer that has Photoshop and Illustrator.' };
 const PLAN_LABEL = { none: 'Not made yet', current: 'Ready to approve', outdated: 'Out of date — plan again' } as const;
-const STATUS_LABEL: Record<JobView['status'], string> = { queued: 'Waiting', running: 'Drawing…', done: 'Finished', failed: 'Needs attention' };
-const ROLE_LABEL: Record<SkillRole, string> = { style: 'Art style', artwork: 'Artwork', general: 'General skill' };
+const STATUS_LABEL: Record<JobView['status'], string> = { queued: 'Waiting', running: 'Working…', review: 'Your review', done: 'Finished', failed: 'Needs attention' };
+const ROLE_LABEL: Record<SkillRole, string> = { orchestration: 'Master flow', style: 'Art style', artwork: 'Artwork', general: 'General skill' };
 const HANDMADE_LABEL: Record<HandmadeMode, string> = {
   draw: 'Hand-made — redrawn in Photoshop/Illustrator with manual tools (no AI image generation)',
   strict: 'Hand-made — a designer draws it from the job sheet (no AI)',
@@ -61,6 +62,8 @@ export interface Bridge {
   plan: (request: unknown) => Promise<DesignPlan>;
   /** hand-made jobs: upload the artwork the designer drew */
   handIn: (id: string, kind: HandInKind, file: File) => Promise<void>;
+  /** orchestrated jobs: approve / reject the concept or the final version, resume, cancel */
+  act: Act;
 }
 
 /** Talks to the local production bridge: health once, jobs on a slow poll while any job is active. */
@@ -102,6 +105,11 @@ export function useProductionBridge(): Bridge {
     await refresh();
   }, [refresh]);
 
+  const act = useCallback<Act>(async (id, action, body = {}) => {
+    await api(`jobs/${id}/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    await refresh();
+  }, [refresh]);
+
   const plan = useCallback(async (request: unknown) => {
     const body = await api<{ plan?: unknown }>('plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
     const parsed = parsePlan(body.plan);
@@ -109,7 +117,7 @@ export function useProductionBridge(): Bridge {
     return parsed.plan;
   }, []);
 
-  return { health, jobs, activeJobs, refresh, send, plan, handIn };
+  return { health, jobs, activeJobs, refresh, send, plan, handIn, act };
 }
 
 /** Shown only when something needs attention; a healthy connection gets a quiet one-line confirmation. */
@@ -449,6 +457,7 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
                 <p className="mt-1 text-[14px] text-[var(--text-secondary)]">{j.styleName} · {j.ratio}</p>
                 <p className="job-brief">“{j.briefExcerpt}”</p>
                 {j.message && <p className={`job-message ${j.status === 'failed' ? 'is-failed' : ''}`}>{j.message}</p>}
+                {j.orchestration && <OrchestratedJob job={{ ...j, orchestration: j.orchestration }} act={bridge.act} />}
                 {j.status === 'done' && (j.files ?? []).length > 0 && (
                   <div className="job-files">
                     {j.files.includes('artwork.psd') && (
@@ -472,7 +481,7 @@ export function JobsPage({ dispatch, bridge }: PageProps & { bridge: Bridge }) {
                   job {j.id}
                 </p>
               </div>
-              {j.hasPreview && j.runner !== 'mock' && (
+              {j.hasPreview && j.runner !== 'mock' && j.orchestration?.state !== 'FINAL_REVIEW' && (
                 <img className="job-preview" src={`/api/production/jobs/${j.id}/preview`} alt={`Finished artwork: ${j.templateTitle ?? j.styleName}`} loading="lazy" />
               )}
             </li>

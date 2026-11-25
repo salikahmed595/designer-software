@@ -10,12 +10,23 @@
  *   GET  /api/production/health        which runner is active
  *   GET  /api/production/skills        whether each skill named in production/skills.json is installed
  *
+ * Every AI-assisted job runs through the master orchestration (./orchestrator.ts, skill
+ * universal-artwork-production-agent): OpenAI concept (reference only) -> designer approval -> native production in
+ * seven verified stages per asset -> designer approval of one exact version -> export. Its actions:
+ *   GET  /api/production/jobs/:id/concepts/:n          a concept image (for the designer; never reachable from production)
+ *   POST /api/production/jobs/:id/concept/approve      {version}      lock that concept and start production
+ *   POST /api/production/jobs/:id/concept/reject       {feedback}     make a new concept that answers the feedback
+ *   POST /api/production/jobs/:id/final/approve        {version}      export exactly that version
+ *   POST /api/production/jobs/:id/final/reject         {feedback}     correct, then review again
+ *   POST /api/production/jobs/:id/resume               {feedback?}    continue a job that needs a human
+ *   POST /api/production/jobs/:id/cancel               {}             stop the job (and its agent)
+ * A brief that forbids AI (or aiPermission "forbidden") goes to the hand-made route: no concept, no agent.
+ *
  * Runner (env LUMORA_RUNNER): "claude" starts a Claude Code agent that may use only the Photoshop and
  * Illustrator tools plus file tools; "mock" writes a placeholder (tests / demos); "off" only queues.
  * Default: "claude" when the CLI is found (LUMORA_CLAUDE_BIN or `claude` on PATH) and Photoshop 2023 +
  * Illustrator 2022 are installed and connected (see ./adobe.ts — no other Adobe version is used), otherwise "off".
  */
-import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -23,10 +34,15 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Plugin } from 'vite';
 import { accountsSummary, agentAccounts, agentArgs, agentEnv, bareSkillNote, mcpServersFor, runWithFallback } from './accounts';
-import { ensureAdobe, readRegisteredServers, shellArg } from './adobe';
+import { ensureAdobe, readRegisteredServers } from './adobe';
+import { runProcess } from './process';
+import { openAiKeyStatus, realDeps } from './agents';
+import { mockConcept, mockCreate, mockVerify } from './mock-runner';
+import { createOrchestrator } from './orchestrator';
+import { forbidsAi } from '../src/state/orchestration';
 import { ensureDesignAssets } from './assets';
 import {
-  accountProblem, DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, SOURCE_FILES, applySkillChange, buildAgentPrompt,
+  ORCHESTRATION_SKILL, accountProblem, DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, SOURCE_FILES, applySkillChange, buildAgentPrompt,
   handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest, validatePlanRequest,
   type BridgeHealth, type DownloadFile, type HandInKind, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
 } from '../src/state/production';
@@ -96,44 +112,6 @@ function readJson(req: IncomingMessage): Promise<unknown> {
 
 const exists = (p: string) => fs.stat(p).then((s) => s.size > 0, () => false);
 
-function runProcess(
-  bin: string, args: string[], cwd: string, stdin: string | null, timeoutMs: number, logFile: string | null, env?: NodeJS.ProcessEnv,
-): Promise<number | null> {
-  return new Promise((resolve) => {
-    // shell is needed on Windows for .cmd shims; arguments are fixed constants or our own paths, quoted for cmd.
-    const viaShell = process.platform === 'win32';
-    let command = bin;
-    let argv = args;
-    try {
-      if (viaShell) {
-        command = /\s/.test(bin) && !bin.startsWith('"') ? `"${bin}"` : bin;
-        argv = args.map(shellArg);
-      }
-    } catch {
-      resolve(null);
-      return;
-    }
-    const child = spawn(command, argv, { cwd, shell: viaShell, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...(env ? { env } : {}) });
-    const log: Buffer[] = [];
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    child.stdout.on('data', (d: Buffer) => log.push(d));
-    child.stderr.on('data', (d: Buffer) => log.push(d));
-    let finished = false;
-    const finish = (code: number | null) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      // The log is complete before the caller reads it (it decides whether to try the next account).
-      if (logFile) void fs.writeFile(logFile, Buffer.concat(log)).catch(() => undefined).then(() => resolve(code));
-      else resolve(code);
-    };
-    child.on('error', () => finish(null));
-    child.on('close', finish);
-    if (stdin !== null) child.stdin.write(stdin);
-    child.stdin.end();
-  });
-}
-
 export function productionBridge(): Plugin {
   const jobsDir = path.resolve(process.env.LUMORA_JOBS_DIR ?? 'production/jobs');
   /** Which skill draws what — written by the Skills screen. */
@@ -145,6 +123,24 @@ export function productionBridge(): Plugin {
   let planning = 0;
   let runner: RunnerKind = 'off';
   let detail = 'Checking for the Claude Code agent…';
+  const mockRunner = process.env.LUMORA_RUNNER === 'mock';
+
+  /** AI-assisted jobs: the master orchestration decides every step, from files and verdicts. */
+  const orch = createOrchestrator({
+    jobsDir,
+    canRun: () => runner !== 'off',
+    runnerKind: () => runner,
+    claudeJson: () => fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => ''),
+    nodeBin: process.execPath,
+    missingSkills: async (names) => {
+      if (runner !== 'claude') return [];
+      const have = new Set((await listSkills(skillDirs())).map((x) => x.name));
+      return names.filter((n) => skillStatus(n, have) === 'missing');
+    },
+    ...(mockRunner
+      ? { generateConcept: (r) => mockConcept(r), runCreator: (r) => mockCreate(r), runVerifier: (r) => mockVerify(r) }
+      : realDeps({ env: process.env, claudeBin, appDir: process.cwd(), skillDirs })),
+  });
 
   const ready = (async () => {
     await fs.mkdir(jobsDir, { recursive: true });
@@ -153,6 +149,7 @@ export function productionBridge(): Plugin {
       if (!JOB_ID.test(id)) continue;
       try {
         const saved = JSON.parse(await fs.readFile(path.join(jobsDir, id, 'status.json'), 'utf8')) as JobView & { skill?: string };
+        if (saved.orchestration) continue; // the orchestrator loads its own jobs
         // Jobs saved before skills were per job had a single "skill" and no file list.
         const { skill: oldSkill, ...view } = saved;
         const skills: SkillUse[] = Array.isArray(view.skills) ? view.skills : oldSkill ? [{ name: oldSkill, role: 'style' }] : [];
@@ -184,6 +181,9 @@ export function productionBridge(): Plugin {
     } else {
       detail = 'The drawing agent is not set up on this computer yet, so jobs are saved but cannot start. Ask your studio admin — the setup steps are in the README.';
     }
+    if (!mockRunner) detail = `${detail} ${await openAiKeyStatus(process.env, process.cwd())}`;
+    await orch.ready;
+    orch.kick();
   })();
 
   const save = async (job: StoredJob) => {
@@ -338,7 +338,7 @@ export function productionBridge(): Plugin {
     return run.value;
   }
 
-  async function createJob(job: ProductionJob): Promise<StoredJob> {
+  async function createJob(job: ProductionJob, note?: string): Promise<StoredJob> {
     const id = randomBytes(6).toString('hex');
     const dir = path.join(jobsDir, id);
     await fs.mkdir(path.join(dir, 'output'), { recursive: true });
@@ -358,7 +358,7 @@ export function productionBridge(): Plugin {
       const skillName = HAND_MADE_SKILL;
       const sheet = handmadeJobSheet(job, { id, createdAt, skillName, skillText: await readSkillText(skillDirs(), skillName), referenceFile: reference ? `reference.${reference.ext}` : null });
       await fs.writeFile(path.join(dir, 'output', JOB_SHEET), sheet);
-      const stored: StoredJob = { ...base, status: 'done', message: 'Job sheet ready. A designer draws this by hand — no AI was used for this job.', files: [JOB_SHEET] };
+      const stored: StoredJob = { ...base, status: 'done', message: note ?? 'Job sheet ready. A designer draws this by hand — no AI was used for this job.', files: [JOB_SHEET] };
       jobs.set(id, stored);
       await save(stored);
       return stored;
@@ -390,11 +390,12 @@ export function productionBridge(): Plugin {
       return send(res, 200, await skillsState());
     }
     if (req.method === 'GET' && route === 'jobs') {
-      const list: JobView[] = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 30).map(({ dir: _dir, ...view }) => view);
+      const list: JobView[] = [...[...jobs.values()].map(({ dir: _dir, ...view }) => view), ...orch.list()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 30);
       return send(res, 200, { jobs: list });
     }
 
-    if (req.method !== 'POST' || !['jobs', 'plan', 'skills/assign', 'skills/add'].includes(route)) return handleFiles(req, res, route);
+    const action = /^jobs\/([a-z0-9]{12})\/(concept\/approve|concept\/reject|final\/approve|final\/reject|resume|cancel)$/.exec(route);
+    if (req.method !== 'POST' || (!action && !['jobs', 'plan', 'skills/assign', 'skills/add'].includes(route))) return handleFiles(req, res, route);
     // Every POST is JSON. Browsers can't send JSON to another site without asking first, which blocks other websites.
     if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'Send JSON.' });
     let body: unknown;
@@ -403,6 +404,19 @@ export function productionBridge(): Plugin {
     } catch (e) {
       const tooLarge = e instanceof Error && e.message === 'too-large';
       return send(res, tooLarge ? 413 : 400, { error: tooLarge ? 'The request is too large.' : 'The request is not valid JSON.' });
+    }
+
+    if (action) {
+      if (!orch.has(action[1])) return send(res, 404, { error: 'That job is not there.' });
+      const b = (body ?? {}) as { version?: unknown; feedback?: unknown };
+      const [id, what] = [action[1], action[2]];
+      const r = what === 'concept/approve' ? await orch.approveConcept(id, b.version)
+        : what === 'concept/reject' ? await orch.rejectConcept(id, b.feedback)
+        : what === 'final/approve' ? await orch.approveFinal(id, b.version)
+        : what === 'final/reject' ? await orch.rejectFinal(id, b.feedback)
+        : what === 'resume' ? await orch.resume(id, b.feedback)
+        : await orch.cancel(id);
+      return r.ok ? send(res, 200, { job: r.job }) : send(res, r.status, { error: r.error });
     }
 
     if (route === 'skills/assign') {
@@ -460,13 +474,22 @@ export function productionBridge(): Plugin {
     if (!checked.ok) return send(res, 400, { error: checked.errors.join(' ') });
     // A real agent can't draw with a skill that isn't installed — say so now instead of failing later.
     // (A strict hand-made job runs no agent, so a missing skill only means its steps are left out of the sheet.)
+    // A brief that forbids AI never reaches the AI flow: it becomes a hand-made job (no concept, no agent).
+    const aiForbidden = !checked.job.handmade && (forbidsAi(checked.job.brief) || (body as { aiPermission?: unknown }).aiPermission === 'forbidden');
+    if (aiForbidden) {
+      const human: ProductionJob = { ...checked.job, skills: [{ name: HAND_MADE_SKILL, role: 'artwork' }], handmade: { mode: 'strict', add: [], remove: [] } };
+      const { dir: _d, ...humanView } = await createJob(human, 'This brief does not allow AI, so it went to the hand-made route: no concept was generated and no agent will draw it. A designer draws it from the job sheet.');
+      return send(res, 201, { job: humanView });
+    }
     if (runner === 'claude' && checked.job.handmade?.mode !== 'strict') {
       const have = new Set(installed.map((s) => s.name));
-      const missing = checked.job.skills.filter((s) => skillStatus(s.name, have) === 'missing').map((s) => `“${s.name}”`);
+      const names = [ORCHESTRATION_SKILL, ...checked.job.skills.map((s) => s.name)].filter((n, i, all) => all.indexOf(n) === i);
+      const missing = names.filter((n) => skillStatus(n, have) === 'missing').map((n) => `“${n}”`);
       if (missing.length > 0) {
         return send(res, 409, { error: `The skill ${missing.join(' and ')} is not installed on this computer, so this can’t be drawn yet. Pick another one on the Skills screen.` });
       }
     }
+    if (!checked.job.handmade) return send(res, 201, { job: await orch.create(checked.job) });
     const { dir: _dir, ...view } = await createJob(checked.job);
     return send(res, 201, { job: view });
   }
@@ -478,6 +501,7 @@ export function productionBridge(): Plugin {
    */
   async function handIn(req: IncomingMessage, res: ServerResponse, id: string, kind: HandInKind): Promise<void> {
     const job = jobs.get(id);
+    if (!job && orch.has(id)) return send(res, 409, { error: 'Only hand-made jobs take a hand-in. The agent saves the files for other jobs.' });
     if (!job) return send(res, 404, { error: 'That job is not there.' });
     if (!job.handmade) return send(res, 409, { error: 'Only hand-made jobs take a hand-in. The agent saves the files for other jobs.' });
     if (job.status !== 'done') return send(res, 409, { error: 'This job’s sheet is not ready yet.' });
@@ -513,27 +537,37 @@ export function productionBridge(): Plugin {
     }
   }
 
+  function sendPng(res: ServerResponse, file: string): void {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    createReadStream(file).pipe(res);
+  }
+
   async function handleFiles(req: IncomingMessage, res: ServerResponse, route: string): Promise<void> {
     const handInRoute = /^jobs\/([a-z0-9]+)\/hand-in\/(psd|ai)$/.exec(route);
     if (req.method === 'POST' && handInRoute && JOB_ID.test(handInRoute[1])) return handIn(req, res, handInRoute[1], handInRoute[2] as HandInKind);
+    const concept = /^jobs\/([a-z0-9]+)\/concepts\/([1-9][0-9]{0,3})$/.exec(route);
+    if (req.method === 'GET' && concept && JOB_ID.test(concept[1])) {
+      const file = orch.conceptFile(concept[1], Number(concept[2]));
+      if (!file || !(await exists(file))) return send(res, 404, { error: 'No such concept.' });
+      return sendPng(res, file);
+    }
     const preview = /^jobs\/([a-z0-9]+)\/preview$/.exec(route);
     if (req.method === 'GET' && preview && JOB_ID.test(preview[1])) {
       const job = jobs.get(preview[1]);
-      const file = job ? path.join(job.dir, 'output', 'preview.png') : null;
+      const file = orch.has(preview[1]) ? orch.previewFile(preview[1]) : job ? path.join(job.dir, 'output', 'preview.png') : null;
       if (!file || !(await exists(file))) return send(res, 404, { error: 'No preview for this job.' });
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'image/png');
-      res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      createReadStream(file).pipe(res);
-      return;
+      return sendPng(res, file);
     }
     // Only fixed file names (the two sources and the hand-made job sheet) can ever be served — no paths from the request reach the disk.
     const download = /^jobs\/([a-z0-9]+)\/files\/([a-z.-]+)$/.exec(route);
     if (req.method === 'GET' && download && JOB_ID.test(download[1])) {
       const name = DOWNLOAD_FILES.find((f) => f === download[2]);
-      const job = jobs.get(download[1]);
-      const file = job && name ? path.join(job.dir, 'output', name) : null;
+      const job = jobs.get(download[1]) ?? orch.get(download[1]);
+      // Orchestrated jobs: only the exported, designer-approved version is ever downloadable.
+      const file = !job || !name ? null : orch.has(download[1]) ? orch.exportFile(download[1], name) : path.join((job as StoredJob).dir, 'output', name);
       if (!file || !name || !(await exists(file))) return send(res, 404, { error: 'That file is not there.' });
       const base = (job?.templateTitle ?? 'artwork').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'artwork';
       res.statusCode = 200;

@@ -31,11 +31,31 @@ npm run build
 ## How production works
 
 0. **Claude plans first.** On the Brief screen, **Plan with Claude** sends the brief to `POST /api/production/plan`. A short, tool-less Claude call reads it from `brief.json`, as data and never as instructions, and returns a design plan. The plan covers what the client wants, the concept, composition, colours, typography, the parts to draw (each in Photoshop or Illustrator), free assets to look for, and the choices it made. It can also suggest a better art style. The designer edits any of it, or asks Claude to redo it with a note, then presses **Approve plan and draw**. If the brief changes after planning, the plan is marked out of date and must be made again. The plan is checked on both sides (`src/state/plan.ts`), saved in `job.json`, and the drawing agent is told to follow it. The demo runner returns a fixed plan without calling Claude.
-1. The dev server's local bridge (`server/plugin.ts`) checks the request and writes `production/jobs/<id>/` with `job.json`, the reference image and `prompt.txt` (the agent's instructions).
-2. It starts a Claude Code agent in that folder, one job at a time. The agent may use only the `photoshop` and `illustrator` tool servers plus file tools — no command line.
-3. The agent loads the job's skills (see below), draws by hand — no AI image generation — and saves layered `output/artwork.psd` and/or `output/artwork.ai`, a flattened `output/preview.png` and `output/result.json`.
-4. The bridge checks the result before calling it finished: there must be a preview **and** a layered source file. It reads the layer count from `artwork.psd`; a flattened PSD (one layer) is marked "Needs attention", because designers must be able to edit every part.
-5. The Jobs screen shows the status, the skills used, the notes, and **Download layered PSD** / **Download Illustrator file** buttons.
+1. Every AI-assisted job then runs through the **master orchestration** below. It replaces the old "agent draws straight from the brief" flow.
+2. A brief that forbids AI ("no AI", "without AI", "100% hand-made"…, or `aiPermission: "forbidden"` in the API) never reaches it: it becomes a hand-made job sheet (see Hand-made), with no concept and no agent.
+
+### Master orchestration (every AI-assisted job)
+
+The app enforces `skill/universal-artwork-production-agent/SKILL.md` for every job. The server, not the LLM, makes every state change: `src/state/orchestration.ts` holds the rules and `server/orchestrator.ts` runs them. The states are `BRIEF_PENDING → ART_DIRECTION_READY → CONCEPT_GENERATING → CONCEPT_QA → CONCEPT_REVIEW → CONCEPT_APPROVED → ASSET_PLANNING → PRODUCTION → STAGE_VERIFYING → (STAGE_CORRECTING) → ASSEMBLY → FINAL_QA → FINAL_REVIEW → EXPORTING → DELIVERED`, plus `HUMAN_INTERVENTION_REQUIRED` and `CANCELLED`. Only the designer can approve, reject, resume or cancel. Every change is saved with its reason and evidence in `status.json` and `logs/transitions.jsonl`.
+
+1. **Concept (reference only).** The server writes `plans/style_contract.json`, then asks the OpenAI Images API for a concept (`server/openai.ts`, default model `gpt-image-2.6-sunburst`; set `LUMORA_IMAGE_MODEL` / `LUMORA_IMAGE_QUALITY` to change it). The image goes to `concepts/reference_only/concept-vN.png`. Automatic QA checks that it is a real PNG of the right size and aspect. After 4 failed attempts the job asks a human.
+2. **Designer review.** In **Jobs**, the designer sees the concept and either approves it or rejects it with feedback (a new version answers the feedback; only the newest can be approved). On approval the version and its sha256 are locked (`approvals/concept.json`). If the file changes later, production is refused.
+3. **Production gate.** No drawing agent runs before approval. Each run loads `universal-artwork-production-agent` first, then the style skills, and works **only** in `production/`. The concept is never reachable from there:
+   - The per-job Photoshop/Illustrator connectors are started with `--allowed-root <job>/production`, so `place` / `doc_open` of the concept is refused by the connector itself. A test proves this against the real connectors.
+   - `--strict-mcp-config`; no Bash, PowerShell or web tools; `Read`/`Edit` deny rules for the concept, approvals and control folders.
+   - A PreToolUse hook (`server/production-guard.mjs`) refuses any tool call that names the concept folder or a path outside `production/`.
+   - Final QA hashes every file in `production/` and refuses the job if a byte copy of any concept is found.
+4. **Asset registry and 7 stages.** The approved plan becomes the asset registry (`plans/asset_registry.json`). For every asset the agent does Sketch, Line Art, Color Fill, Texture, Shadows & Highlights, Effects and Color Grading, and for each stage it writes a native checkpoint, a capture and a report (`production/stages/<asset>/<stage>.json`). The server checks the files. A separate, read-only verifier run (no connectors, no write tools) then judges each stage from the captures. The outcomes:
+   - a failed stage gets a targeted correction run;
+   - the same defect twice, or more than 6 attempts, blocks the stage and asks a human;
+   - an earlier failure invalidates the later stages;
+   - "not applicable" needs a reason and the verifier's approval.
+   The Jobs screen shows each asset's seven statuses (pending / executing / verifying / correcting / passed / not_applicable_verified / blocked / invalidated) with checkpoint and evidence paths.
+5. **Final approval and export.** Final QA hashes the master files into one version id. The designer approves that exact version or sends it back with notes. Only then are the files copied to `exports/` with `final_report.json` (approvals, stages, history, AI disclosure). Downloads serve only exported files. If a file changed after approval, nothing is exported.
+
+Restarts: a job that was running when the app stopped is marked "Interrupted" and waits for **Resume**. **Cancel** stops the agent.
+
+**The OpenAI key** is read on the server for each request, from `OPENAI_API_KEY`, the file named by `LUMORA_OPENAI_KEY_FILE`, the repo root `.env.txt` or `.env`, or `studio-frontend/.env` (form `name: sk-...` or `OPENAI_API_KEY=sk-...`). It is never written to job files, prompts or logs, never sent to the browser, and removed from any error text. The health line shows only where it was found.
 
 ### Hand-made (the client's own design, drawn by a person — never generated)
 
@@ -113,14 +133,19 @@ Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests),
 - The skills, canvas size and file names are decided on the server, never taken from the browser.
 - An added skill's name must be lowercase letters, numbers and hyphens, so it can't point outside the skills folder; files are capped at about 200 KB and never overwrite an existing skill.
 - The E2E tests use their own temporary copy of the skill map and their own install folder, so they never change your real skills.
-- Downloads serve only `artwork.psd`, `artwork.ai` and `handmade-job-sheet.md` from a job's `output/` folder — no other file or path.
+- Downloads serve only `artwork.psd`, `artwork.ai` and `handmade-job-sheet.md` — from `exports/` after final approval for orchestrated jobs, from `output/` for hand-made jobs — no other file or path.
 - A hand-in is saved under a fixed name (`artwork.psd` / `artwork.ai`), never the uploaded file's name. It is streamed to a temporary file with a 1 GB cap, checked from its bytes, and only then moved into place; a refused or broken upload leaves nothing behind. It must be sent as `application/octet-stream`, which other websites can't send without asking first.
 - The client's text stays in `job.json` as data; the agent is told to treat it as art direction only.
 - `production/jobs/` (client briefs and reference images) is never committed.
 
 ### Not verified yet
 
-The tests use the demo runner, which writes a placeholder preview and a skeleton 3-layer PSD that go through the same checks as a real job. Real agent runs in Photoshop and Illustrator have been done by hand on the studio computer, not in the automated tests.
+The tests use the demo runner. It writes placeholder concepts, stage checkpoints, captures and a skeleton layered PSD, and these go through the same orchestration, checks and approvals as a real job. Not verified in automated tests:
+
+- a live OpenAI Images call (the request and its errors are tested with a fake `fetch`; the model name `gpt-image-2.6-sunburst` is not confirmed against the live API);
+- live Claude creator and verifier runs under the orchestration (arguments, prompts and the reply parser are tested; the runs themselves are not);
+- the `--settings` deny rules and the PreToolUse guard hook inside a real Claude Code run (the guard's decisions are unit-tested; Claude Code skips hooks in `--bare` mode, so API-key runs rely on the other layers);
+- real drawing quality in Photoshop 2023 / Illustrator 2022 through all seven stages. Only the connectors' refusal of the concept path was run against the real apps.
 
 ## Where things are
 
@@ -134,3 +159,7 @@ The tests use the demo runner, which writes a placeholder preview and a skeleton
 - `src/glass/Thumb.tsx` — one drawn thumbnail per artwork type and per art style.
 - `src/glass/pages.tsx` (step 1), `src/glass/Produce.tsx` (steps 2 and 3), `src/glass/ui.tsx`, `src/index.css`.
 - `server/plugin.ts` — the local production bridge.
+- `src/state/orchestration.ts` — the master orchestration's rules: states, who may make each change, concept QA, the asset registry and stage verdicts.
+- `server/orchestrator.ts` — runs those rules per job (concept, approvals, production queue, verification, export); `server/agents.ts` holds the real OpenAI / creator / verifier workers and `server/mock-runner.ts` the demo ones.
+- `server/gate.ts`, `server/production-guard.mjs` — the production gate (connector roots, deny rules, guard hook, provenance scan).
+- `src/glass/Orchestration.tsx` — concept review, stage table, final approval on the Jobs screen.

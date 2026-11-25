@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
 // These tests run against the real dev server and its production bridge, with the demo runner
 // (LUMORA_RUNNER=mock in playwright.config.ts) so no real agent is ever started.
@@ -31,6 +31,22 @@ const thumbsHaveSize = async (page: Page, selector: string, min: number) => {
   expect(thumbs.length).toBeGreaterThan(0);
   for (const t of thumbs) expect((await t.boundingBox())?.height ?? 0).toBeGreaterThan(min);
 };
+
+type ApiJob = { id: string; status: string; handmade?: string | null; files: string[]; orchestration?: { state: string; blocker: string | null; finalCandidate: { version: string } | null; concept: { versions: Array<{ version: number; feedback: string | null }>; locked: { version: number } | null } } };
+const jobOf = async (request: APIRequestContext, id: string) =>
+  ((await (await request.get('/api/production/jobs')).json()) as { jobs: ApiJob[] }).jobs.find((j) => j.id === id);
+const waitState = (request: APIRequestContext, id: string, state: string) =>
+  expect.poll(async () => (await jobOf(request, id))?.orchestration?.state, { timeout: 20000 }).toBe(state);
+const act = (request: APIRequestContext, id: string, action: string, data: unknown = {}) => request.post(`/api/production/jobs/${id}/${action}`, { data });
+/** Concept approval → production → final approval, through the API. */
+async function deliver(request: APIRequestContext, id: string) {
+  await waitState(request, id, 'CONCEPT_REVIEW');
+  expect((await act(request, id, 'concept/approve', { version: 1 })).status()).toBe(200);
+  await waitState(request, id, 'FINAL_REVIEW');
+  const version = (await jobOf(request, id))!.orchestration!.finalCandidate!.version;
+  expect((await act(request, id, 'final/approve', { version })).status()).toBe(200);
+  await waitState(request, id, 'DELIVERED');
+}
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
@@ -94,22 +110,45 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await plan.getByLabel(/^concept/i).fill(concept);
   await page.getByRole('button', { name: /approve plan and draw/i }).click();
 
-  // Step 3
+  // Step 3 — the master orchestration: an AI concept (reference only) waits for the designer; nothing is drawn yet.
   await expect(h1(page, /^jobs$/i)).toBeVisible();
   const job = page.getByRole('list', { name: 'Jobs' }).getByRole('listitem').filter({ hasText: brief });
   await expect(job).toBeVisible();
   await expect(job).toContainText('Mascot Character');
-  await expect(job).toHaveAttribute('data-status', 'done', { timeout: 15000 });
-  await expect(job).toContainText(/no artwork was made/i);
-  await expect(job).toContainText('2d-artwork-photoshop-illustrator');
-
-  // The approved (edited) plan is saved with the job and handed to the drawing agent.
+  await expect(job).toHaveAttribute('data-status', 'review', { timeout: 15000 });
+  const conceptReview = job.getByRole('region', { name: 'Concept review' });
+  await expect(conceptReview.getByRole('img', { name: 'AI concept version 1' })).toBeVisible();
+  await expect(conceptReview).toContainText(/reference only/i);
   const jobId = /job (\S+)\s*$/.exec((await job.locator('.job-meta').textContent()) ?? '')?.[1];
   expect(jobId).toBeTruthy();
+  expect((await page.request.get(`/api/production/jobs/${jobId}/files/artwork.psd`)).status()).toBe(404);
+  await noOverflow(page);
+  await conceptReview.getByRole('button', { name: 'Approve concept v1' }).click();
+
+  // Production: every asset through the seven stages, independently verified; then one exact version waits for the designer.
+  const finalReview = job.getByRole('region', { name: 'Final review' });
+  await expect(finalReview).toBeVisible({ timeout: 20000 });
+  await expect(job.locator('td.is-passed').first()).toBeVisible();
+  await expect(job.locator('td.is-not_applicable_verified').first()).toBeVisible();
+  await expect(job.getByRole('list', { name: 'Checkpoints and evidence' })).toContainText(/checkpoints\/.+\/sketch\/1\//);
+  await expect(job).toContainText(/Approved concept: v1/);
+  await noOverflow(page);
+  await finalReview.getByRole('button', { name: 'Approve this version' }).click();
+  await expect(job).toHaveAttribute('data-status', 'done', { timeout: 15000 });
+  await expect(job).toContainText('universal-artwork-production-agent');
+  await expect(job).toContainText('2d-artwork-photoshop-illustrator');
+
+  // The approved (edited) plan is saved with the job and handed to the drawing agent — without the concept.
   const jobDir = path.join('test-results', 'production-jobs', jobId!);
-  const savedJob = JSON.parse(await readFile(path.join(jobDir, 'job.json'), 'utf8')) as { plan: { concept: string } | null };
+  const savedJob = JSON.parse(await readFile(path.join(jobDir, 'brief', 'job.json'), 'utf8')) as { plan: { concept: string } | null };
   expect(savedJob.plan?.concept).toBe(concept);
-  expect(await readFile(path.join(jobDir, 'prompt.txt'), 'utf8')).toMatch(/design plan the designer approved/);
+  const sheet = await readFile(path.join(jobDir, 'production', 'job.json'), 'utf8');
+  expect((JSON.parse(sheet) as { plan: { concept: string } }).plan.concept).toBe(concept);
+  expect(sheet).not.toMatch(/reference_only|concept-v\d/);
+  expect(await readFile(path.join(jobDir, 'control', 'prompt-run-1.txt'), 'utf8')).toMatch(/universal-artwork-production-agent/);
+  const report = JSON.parse(await readFile(path.join(jobDir, 'final_report.json'), 'utf8')) as { concept: { version: number }; aiDisclosure: string };
+  expect(report.concept.version).toBe(1);
+  expect(report.aiDisclosure).toMatch(/AI-assisted/);
 
   // The layered source is judged by the bridge (layer count read from the PSD) and can be downloaded.
   const psd = job.getByRole('link', { name: /download layered psd/i });
@@ -303,7 +342,7 @@ test('a hand-in is checked from its real bytes and only hand-made jobs take one'
   // A normal agent job never takes a hand-in: its files come from the agent and are judged on their own.
   const agentJob = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `hand-in guard ${Date.now()}`, templateId: 'mascot' } });
   const { job: other } = (await agentJob.json()) as { job: { id: string } };
-  await expect.poll(async () => ((await (await request.get('/api/production/jobs')).json()) as { jobs: { id: string; status: string }[] }).jobs.find((j) => j.id === other.id)?.status, { timeout: 15000 }).toBe('done');
+  await waitState(request, other.id, 'CONCEPT_REVIEW');
   expect((await handIn('psd', psd(4), undefined, other.id)).status()).toBe(409);
 });
 
@@ -333,11 +372,59 @@ test('only the layered source files and the hand-made job sheet can ever be down
   const made = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `download guard ${Date.now()}`, templateId: 'mascot' } });
   expect(made.status()).toBe(201);
   const { job } = (await made.json()) as { job: { id: string } };
-  await expect.poll(async () => ((await (await request.get('/api/production/jobs')).json()) as { jobs: { id: string; status: string }[] }).jobs.find((j) => j.id === job.id)?.status, { timeout: 15000 }).toBe('done');
+  await deliver(request, job.id);
 
   expect((await request.get(`/api/production/jobs/${job.id}/files/artwork.psd`)).status()).toBe(200);
-  for (const evil of ['job.json', 'prompt.txt', 'result.json', '..%2Fjob.json', '..%2F..%2Fpackage.json', 'artwork.psd%00.png']) {
+  for (const evil of ['job.json', 'prompt.txt', 'result.json', 'final_report.json', 'concept-v1.png', '..%2Fjob.json', '..%2F..%2Fpackage.json', 'artwork.psd%00.png']) {
     expect((await request.get(`/api/production/jobs/${job.id}/files/${evil}`)).status(), evil).toBe(404);
   }
   expect((await request.get('/api/production/jobs/zzzzzzzzzzzz/files/artwork.psd')).status()).toBe(404);
+});
+
+test('master orchestration gates: reject with feedback, no step out of order, no-AI briefs go to a human, cancel', async ({ page, request, isMobile }) => {
+  const made = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `gates ${isMobile ? 'm' : 'd'} ${Date.now()} fox`, templateId: 'mascot' } });
+  expect(made.status()).toBe(201);
+  const { job } = (await made.json()) as { job: ApiJob };
+  await waitState(request, job.id, 'CONCEPT_REVIEW');
+
+  // Nothing out of order: no final approval, export or download before the concept is approved.
+  expect((await act(request, job.id, 'final/approve', { version: 'x'.repeat(64) })).status()).toBe(409);
+  expect((await act(request, job.id, 'concept/approve', { version: 7 })).status()).toBe(409);
+  expect((await act(request, job.id, 'concept/reject', { feedback: '' })).status()).toBe(400);
+  expect((await request.get(`/api/production/jobs/${job.id}/files/artwork.psd`)).status()).toBe(404);
+  expect((await act(request, job.id, 'concept/approve', { version: 1 })).status()).toBe(200);
+  await waitState(request, job.id, 'FINAL_REVIEW');
+  expect((await act(request, job.id, 'final/approve', { version: '0'.repeat(64) })).status()).toBe(409);
+  expect((await request.get(`/api/production/jobs/${job.id}/files/artwork.psd`)).status()).toBe(404);
+  const foreign = await request.post(`/api/production/jobs/${job.id}/cancel`, { data: {}, headers: { Origin: 'https://evil.example' } });
+  expect(foreign.status()).toBe(403);
+
+  // Cancel stops the job; later actions are refused.
+  expect((await act(request, job.id, 'cancel')).status()).toBe(200);
+  expect((await jobOf(request, job.id))?.orchestration?.state).toBe('CANCELLED');
+  expect((await act(request, job.id, 'final/approve', { version: '0'.repeat(64) })).status()).toBe(409);
+
+  // A brief that forbids AI never gets a concept or an agent: it becomes a hand-made job sheet.
+  const human = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `No AI please, fully hand drawn ${Date.now()}`, templateId: 'mascot' } });
+  const { job: h } = (await human.json()) as { job: ApiJob };
+  expect(h).toMatchObject({ handmade: 'strict', status: 'done', files: ['handmade-job-sheet.md'] });
+  expect(h.orchestration).toBeUndefined();
+  await expect(readFile(path.join('test-results', 'production-jobs', h.id, 'concepts', 'reference_only', 'concept-v1.png'))).rejects.toThrow();
+
+  // In the app: the designer rejects a concept with feedback and gets a new version that carries it.
+  const brief = `reject ${isMobile ? 'm' : 'd'} ${Date.now()} owl mascot`;
+  const second = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief, templateId: 'mascot' } });
+  const { job: r } = (await second.json()) as { job: ApiJob };
+  await waitState(request, r.id, 'CONCEPT_REVIEW');
+  await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Jobs' }).click();
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  const card = page.getByRole('list', { name: 'Jobs' }).getByRole('listitem').filter({ hasText: brief });
+  const review = card.getByRole('region', { name: 'Concept review' });
+  await review.getByLabel('What should change in the concept?').fill('Make the owl purple');
+  await review.getByRole('button', { name: 'Make a new concept' }).click();
+  await expect(card.getByRole('button', { name: 'Approve concept v2' })).toBeVisible({ timeout: 15000 });
+  await expect(card.getByRole('img', { name: 'AI concept version 2' })).toBeVisible();
+  expect((await jobOf(request, r.id))?.orchestration?.concept.versions[1].feedback).toBe('Make the owl purple');
+  expect((await act(request, r.id, 'concept/approve', { version: 1 })).status(), 'only the newest concept can be approved').toBe(409);
+  await noOverflow(page);
 });
