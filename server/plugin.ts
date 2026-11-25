@@ -12,7 +12,7 @@
  * Runner (env LUMORA_RUNNER): "claude" starts a Claude Code agent that may use only the Photoshop and
  * Illustrator tools plus file tools; "mock" writes a placeholder (tests / demos); "off" only queues.
  * Default: "claude" when the CLI is found (LUMORA_CLAUDE_BIN or `claude` on PATH) and Photoshop 2023 +
- * Illustrator 2023 are installed and connected (see ./adobe.ts — no other Adobe version is used), otherwise "off".
+ * Illustrator 2022 are installed and connected (see ./adobe.ts — no other Adobe version is used), otherwise "off".
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -161,7 +161,7 @@ export function productionBridge(): Plugin {
     } else if (wanted === 'off') {
       detail = 'The runner is switched off (LUMORA_RUNNER=off). Jobs are saved but not started.';
     } else if ((await runProcess(claudeBin, ['--version'], jobsDir, null, 20_000, null)) === 0) {
-      // Claude Code is here: make sure the Photoshop 2023 / Illustrator 2023 connectors are registered and installed.
+      // Claude Code is here: make sure the Photoshop 2023 / Illustrator 2022 connectors are registered and installed.
       const claudeJson = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => '');
       const adobe = await ensureAdobe({ claudeBin, roots: [os.homedir(), jobsDir], registered: readRegisteredServers(claudeJson) });
       runner = adobe.ok ? 'claude' : 'off';

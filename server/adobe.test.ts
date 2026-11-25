@@ -14,7 +14,7 @@ describe('parseCheck', () => {
     expect(r.message).toMatch(/Install Adobe Photoshop 2023/);
   });
   it('explains a connector that could not run at all', () => {
-    expect(parseCheck('illustrator', null, '').message).toMatch(/Illustrator 2023 connector .* could not run/);
+    expect(parseCheck('illustrator', null, '').message).toMatch(/Illustrator 2022 connector .* could not run/);
   });
   it('never treats garbage output as success', () => {
     expect(parseCheck('illustrator', 0, 'hello').ok).toBe(false);
@@ -25,12 +25,12 @@ describe('adobeSummary', () => {
   it('is connected only when both 2023 apps pass', () => {
     const s = adobeSummary([{ app: 'photoshop', ok: true, message: '' }, { app: 'illustrator', ok: true, message: '' }]);
     expect(s.ok).toBe(true);
-    expect(s.detail).toMatch(/Photoshop 2023 and Illustrator 2023/);
+    expect(s.detail).toMatch(/Photoshop 2023 and Illustrator 2022/);
   });
   it('lists what to install and asks for a restart', () => {
-    const s = adobeSummary([{ app: 'photoshop', ok: true, message: '' }, { app: 'illustrator', ok: false, message: 'Install Adobe Illustrator 2023.' }]);
+    const s = adobeSummary([{ app: 'photoshop', ok: true, message: '' }, { app: 'illustrator', ok: false, message: 'Install Adobe Illustrator 2022.' }]);
     expect(s.ok).toBe(false);
-    expect(s.detail).toBe('Install Adobe Illustrator 2023. Then restart the studio app.');
+    expect(s.detail).toBe('Install Adobe Illustrator 2022. Then restart the studio app.');
   });
 });
 
@@ -70,7 +70,7 @@ describe('ensureAdobe', () => {
   };
 
   it('checks the already-registered connectors without registering again', async () => {
-    const { exec, calls } = fakeExec((bin) => ({ code: 0, stdout: okReply(bin.includes('ps') ? 'Adobe Photoshop 2023' : 'Adobe Illustrator 2023') }));
+    const { exec, calls } = fakeExec((bin) => ({ code: 0, stdout: okReply(bin.includes('ps') ? 'Adobe Photoshop 2023' : 'Adobe Illustrator 2022') }));
     const out = await ensureAdobe({ claudeBin: 'claude', roots: ['C:\\u'], registered: { photoshop: 'C:\\ps.exe', illustrator: 'C:\\ai.exe' }, exec });
     expect(out.ok).toBe(true);
     expect(calls).toEqual([['C:\\ps.exe', ['--json', 'app', 'check']], ['C:\\ai.exe', ['--json', 'app', 'check']]]);
@@ -93,11 +93,11 @@ describe('ensureAdobe', () => {
     const { exec } = fakeExec((bin) => (bin === 'where' ? { code: 1, stdout: '' } : { code: 0, stdout: okReply('Adobe Photoshop 2023') }));
     const out = await ensureAdobe({ claudeBin: 'claude', roots: ['C:\\u'], registered: { photoshop: 'C:\\ps.exe' }, exec });
     expect(out.ok).toBe(false);
-    expect(out.detail).toMatch(/Illustrator 2023 connector \(cli-anything-illustrator\) is not installed/);
+    expect(out.detail).toMatch(/Illustrator 2022 connector \(cli-anything-illustrator\) is not installed/);
   });
 
   it('reports a missing 2023 app with the connector’s install message', async () => {
-    const { exec } = fakeExec((bin) => (bin.includes('ps') ? { code: 1, stdout: missingReply('Adobe Photoshop 2023') } : { code: 0, stdout: okReply('Adobe Illustrator 2023') }));
+    const { exec } = fakeExec((bin) => (bin.includes('ps') ? { code: 1, stdout: missingReply('Adobe Photoshop 2023') } : { code: 0, stdout: okReply('Adobe Illustrator 2022') }));
     const out = await ensureAdobe({ claudeBin: 'claude', roots: ['C:\\u'], registered: { photoshop: 'C:\\ps.exe', illustrator: 'C:\\ai.exe' }, exec });
     expect(out.ok).toBe(false);
     expect(out.detail).toMatch(/Install Adobe Photoshop 2023/);
