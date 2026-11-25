@@ -323,6 +323,13 @@ describe('agent prompt', () => {
     expect(prompt).toContain('"layers"');
   });
 
+  it('tells the agent to draw organic shapes as real curves in Illustrator, not polygons', () => {
+    const prompt = promptFor({});
+    expect(prompt).toMatch(/path_svg/);
+    expect(prompt).toMatch(/smooth=true/);
+    expect(prompt).toMatch(/not.*straight-sided polygons/i);
+  });
+
   it('may use free, licence-checked assets from the design-assets tools, saved in the job folder and listed in result.json', () => {
     const prompt = promptFor({});
     expect(prompt).toMatch(/design-assets tools/);
