@@ -14,7 +14,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { assertAllowedUrl, fontNeedsCopy, iconSvgUrl, licencePolicy, matchesQuery, parseIconId, resolveSaveDir, safeFileName, sniffType } from './lib.mjs';
+import { assertAllowedUrl, fontNeedsCopy, iconSvgUrl, licencePolicy, parseFontQuery, parseIconId, rankByQuery, resolveSaveDir, safeFileName, sniffType } from './lib.mjs';
 
 const VERSION = '1.0.0';
 const UA = `lumora-design-assets/${VERSION} (design studio tool)`;
@@ -175,7 +175,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Part of the family name, e.g. "bungee". Leave empty to browse a category.' },
+        query: { type: 'string', description: 'A family name, e.g. "bungee" or "orbitron". Style words such as "display" or "script" pick the category; with no family name it browses that category.' },
         category: { type: 'string', enum: ['display', 'sans-serif', 'serif', 'handwriting', 'monospace'], description: 'Font category.' },
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Results (default 20).' },
       },
@@ -213,7 +213,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Words that must all match the name or tags, e.g. "rusty metal".' },
+        query: { type: 'string', description: 'Material words, e.g. "metal" or "rusty metal". Best with plain material words; if nothing matches every word, the closest matches come back with a note.' },
         limit: { type: 'integer', minimum: 1, maximum: 40, description: 'Results (default 20).' },
       },
       required: ['query'],
@@ -310,13 +310,18 @@ async function callTool(name, a = {}) {
 
     case 'fonts_search': {
       fontsCache ??= await get('https://api.fontsource.org/v1/fonts', { json: true });
-      const q = typeof a.query === 'string' ? a.query.trim().toLowerCase() : '';
-      const results = fontsCache
-        .filter((f) => licencePolicy(f.license).use === 'yes')
-        .filter((f) => (!q || f.family.toLowerCase().includes(q) || f.id.includes(q)) && (!a.category || f.category === a.category))
+      const parsed = parseFontQuery(typeof a.query === 'string' ? a.query : '');
+      const category = a.category ?? parsed.category;
+      const open = fontsCache.filter((f) => licencePolicy(f.license).use === 'yes' && (!category || f.category === category));
+      const ranked = parsed.words.length ? rankByQuery(open, parsed.words.join(' '), (f) => [f.family, f.id]) : { matched: 'all', items: open };
+      // A descriptive query that names no font family still browses the category instead of returning nothing.
+      const picked = ranked.matched === 'none' ? open : ranked.items;
+      const note = ranked.matched === 'some' ? `No family name contains every word of "${a.query}": closest matches first.`
+        : ranked.matched === 'none' ? `No family name matches "${parsed.words.join(' ')}". fonts_search matches family names (e.g. "bungee", "orbitron"); showing ${category ?? 'all'} fonts instead.` : undefined;
+      const results = picked
         .slice(0, limitOf(a.limit, 20, 50))
         .map((f) => ({ id: f.id, family: f.family, category: f.category, weights: f.weights, styles: f.styles, licence: f.license, page: `https://fontsource.org/fonts/${f.id}` }));
-      return { results };
+      return note ? { results, category: category ?? null, note } : { results, category: category ?? null };
     }
 
     case 'fonts_download': {
@@ -369,12 +374,13 @@ async function callTool(name, a = {}) {
     case 'textures_search': {
       const query = text(a.query, 'query', 80);
       texturesCache ??= await get('https://api.polyhaven.com/assets?t=textures', { json: true });
-      const results = Object.entries(texturesCache)
-        .map(([id, t]) => ({ id, ...t }))
-        .filter((t) => matchesQuery(t, query))
-        .sort((x, y) => (y.download_count ?? 0) - (x.download_count ?? 0))
+      const ranked = rankByQuery(Object.entries(texturesCache).map(([id, t]) => ({ id, ...t })), query);
+      // Full matches: most downloaded first. Partial matches keep their best-match order.
+      const results = (ranked.matched === 'all' ? [...ranked.items].sort((x, y) => (y.download_count ?? 0) - (x.download_count ?? 0)) : ranked.items)
         .slice(0, limitOf(a.limit, 20, 40))
         .map((t) => ({ id: t.id, name: t.name, tags: (t.tags ?? []).slice(0, 8), categories: t.categories, licence: 'CC0-1.0', powered_by: POLY_HAVEN_CREDIT, preview: `https://cdn.polyhaven.com/asset_img/thumbs/${t.id}.png?width=256`, page: `https://polyhaven.com/a/${t.id}` }));
+      if (ranked.matched === 'some') return { results, note: `Nothing matched every word of "${query}": these match some of the words, best first.` };
+      if (ranked.matched === 'none') return { results, note: 'Nothing matched. Try one plain material word: metal, rock, wood, fabric, concrete, brick, ground, plaster, rust.' };
       return { results };
     }
 

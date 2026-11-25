@@ -86,6 +86,15 @@ test('textures: CC0 Poly Haven search and a JPG colour map', async () => {
   assert.equal(found.results[0].powered_by, 'Powered by Poly Haven');
 });
 
+test('descriptive searches still find something, with a note saying how', async () => {
+  const tex = await ok('textures_search', { query: 'brushed metal', limit: 5 });
+  assert.ok(tex.results.length > 0 && tex.results.every((t) => t.categories.includes('metal') || t.tags.includes('metal') || /metal/i.test(t.name)), JSON.stringify(tex.results.map((t) => t.name)));
+  assert.match(tex.note, /some of the words/);
+  const fonts = await ok('fonts_search', { query: 'bold display font', limit: 5 });
+  assert.equal(fonts.category, 'display');
+  assert.ok(fonts.results.length === 5 && fonts.results.every((r) => r.category === 'display'));
+});
+
 test('art: public-domain Art Institute of Chicago works only', async () => {
   const found = await ok('art_search', { query: 'samurai', limit: 3 });
   assert.ok(found.results.length > 0);

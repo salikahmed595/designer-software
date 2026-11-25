@@ -99,3 +99,44 @@ export function sniffType(buf) {
 
 /** Windows locks a font file while it is loaded, so re-installing the same font must not copy over it. */
 export const fontNeedsCopy = (installed, incoming) => !(installed && Buffer.isBuffer(installed) && installed.equals(incoming));
+
+const words = (s) => String(s ?? '').toLowerCase().split(/[\s,]+/).filter(Boolean);
+const defaultFields = (i) => [i.name, ...(i.tags ?? []), ...(i.categories ?? [])];
+
+/**
+ * Items matching every query word (matched: 'all'); if none do, items matching some words, best first
+ * (matched: 'some'), so a descriptive query like "brushed metal" still finds metal textures.
+ */
+export function rankByQuery(items, query, fields = defaultFields) {
+  const q = words(query);
+  const scored = items.map((item) => {
+    const hay = fields(item).filter(Boolean).join(' ').toLowerCase();
+    const cats = (item.categories ?? []).join(' ').toLowerCase();
+    const hits = q.filter((w) => hay.includes(w));
+    // Matching the material category ("metal") counts double, so it outranks a word that only appears in a name.
+    return { item, hits: hits.length, score: hits.reduce((n, w) => n + (cats.includes(w) ? 2 : 1), 0) };
+  });
+  const all = scored.filter((s) => s.hits === q.length && q.length > 0);
+  if (all.length) return { matched: 'all', items: all.map((s) => s.item) };
+  const some = scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score);
+  return some.length ? { matched: 'some', items: some.map((s) => s.item) } : { matched: 'none', items: [] };
+}
+
+const FONT_CATEGORY = {
+  display: 'display', decorative: 'display', gaming: 'display', headline: 'display',
+  sans: 'sans-serif', 'sans-serif': 'sans-serif', serif: 'serif',
+  handwriting: 'handwriting', handwritten: 'handwriting', script: 'handwriting', brush: 'handwriting',
+  monospace: 'monospace', mono: 'monospace',
+};
+const FONT_FILLER = new Set(['font', 'fonts', 'typeface', 'type', 'bold', 'heavy', 'black', 'thick', 'style', 'title', 'titles', 'text', 'a', 'for']);
+
+/** Splits a font query into family-name words and a category ("bold display font" -> category display). */
+export function parseFontQuery(query) {
+  let category = null;
+  const rest = [];
+  for (const w of words(query)) {
+    if (FONT_CATEGORY[w]) category = FONT_CATEGORY[w];
+    else if (!FONT_FILLER.has(w)) rest.push(w);
+  }
+  return { words: rest, category };
+}

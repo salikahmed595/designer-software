@@ -82,3 +82,38 @@ test('fontNeedsCopy: skip when the identical font is already installed (Windows 
   assert.equal(fontNeedsCopy(Buffer.from('font-bytes-1'), a), false);
   assert.equal(fontNeedsCopy(Buffer.from('font-bytes-2'), a), true);
 });
+
+test('rankByQuery: every word first, else the closest partial matches, never silently empty', async () => {
+  const { rankByQuery } = await import('./lib.mjs');
+  const items = [
+    { name: 'Metal Plate', tags: ['steel', 'rusty'] },
+    { name: 'Brushed Concrete', tags: ['wall'] },
+    { name: 'Rusty Metal Sheet', tags: ['metal'] },
+    { name: 'Grass', tags: ['ground'] },
+  ];
+  assert.deepEqual(rankByQuery(items, 'rusty metal'), { matched: 'all', items: [items[0], items[2]] });
+  const some = rankByQuery(items, 'brushed metal');
+  assert.equal(some.matched, 'some');
+  assert.deepEqual(some.items.map((i) => i.name).sort(), ['Brushed Concrete', 'Metal Plate', 'Rusty Metal Sheet']);
+  assert.deepEqual(rankByQuery(items, 'lava'), { matched: 'none', items: [] });
+  const byName = rankByQuery([{ family: 'Bungee' }, { family: 'Bungee Shade' }], 'bungee shade', (f) => [f.family]);
+  assert.deepEqual(byName.items.map((f) => f.family), ['Bungee Shade']);
+});
+
+test('parseFontQuery: style words become a category, filler words are dropped', async () => {
+  const { parseFontQuery } = await import('./lib.mjs');
+  assert.deepEqual(parseFontQuery('bold display font'), { words: [], category: 'display' });
+  assert.deepEqual(parseFontQuery('Bungee'), { words: ['bungee'], category: null });
+  assert.deepEqual(parseFontQuery('script'), { words: [], category: 'handwriting' });
+  assert.deepEqual(parseFontQuery('rounded sans'), { words: ['rounded'], category: 'sans-serif' });
+  assert.deepEqual(parseFontQuery(''), { words: [], category: null });
+});
+
+test('rankByQuery: a word naming the material category outranks a word only in the name', async () => {
+  const { rankByQuery } = await import('./lib.mjs');
+  const items = [
+    { name: 'Brushed Concrete', categories: ['concrete'] },
+    { name: 'Blue Plate', categories: ['metal'] },
+  ];
+  assert.deepEqual(rankByQuery(items, 'brushed metal').items.map((i) => i.name), ['Blue Plate', 'Brushed Concrete']);
+});
