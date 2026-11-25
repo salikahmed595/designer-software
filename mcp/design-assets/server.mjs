@@ -367,6 +367,7 @@ async function callTool(name, a = {}) {
       );
       return {
         installed: target, already_installed: alreadyInstalled, for: 'current Windows user only', active_now: loaded > 0,
+        photoshop: 'Photoshop 2023 does not list fonts installed for one user (checked on this computer), so use this font for text in Illustrator. For Photoshop text, use a font Photoshop already lists, or place the title made in Illustrator.',
         note: alreadyInstalled && loaded > 0 ? 'Already installed and active: use it for live text.' : loaded > 0 ? 'Photoshop and Illustrator list new fonts only after a restart if they were already open.' : 'Registered, but Windows did not load it into this session: it becomes available after the next sign-in.',
       };
     }
