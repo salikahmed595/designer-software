@@ -30,7 +30,7 @@ describe('three-step flow: choose artwork → brief → jobs', () => {
     expect(s.page).toBe('brief');
     expect(s.brief).toEqual({
       templateId: 'esports-logo', artStyleId: 'flat-vector', prompt: 'neon wolf', displayName: 'NightWolf', referenceName: 'wolf.png', referenceRole: 'Style reference', ratio: 'Square',
-      changes: { add: [], remove: [] },
+      changes: { add: [], remove: [] }, engine: 'adobe',
     });
     expect(s.referencePreview).toBe('data:x');
   });
@@ -149,5 +149,25 @@ describe('the design plan: made for one brief, out of date when the brief change
     const s = run([{ type: 'planReady', plan }], filled());
     expect(run([{ type: 'jobSent' }], s).plan).toBe(null);
     expect(serialize(s)).not.toContain('Wolf head');
+  });
+});
+
+describe('the drawing apps the designer picks per job', () => {
+  const run = (actions: FlowAction[], from: FlowState = initialFlow()) => actions.reduce(flowReducer, from);
+
+  it('starts on Photoshop + Illustrator (Adobe), and switches to PhotoCraft + VectorCraft when picked', () => {
+    expect(initialFlow().brief.engine).toBe('adobe');
+    expect(run([{ type: 'setEngine', engine: 'craft' }]).brief.engine).toBe('craft');
+  });
+
+  it('a plan made for the other apps is out of date', () => {
+    const plan = { understood: 'u', concept: 'c', composition: 'x', palette: [], typography: 't', parts: [], assets: [], assumptions: [], styleNote: null };
+    const s = run([{ type: 'planReady', plan }]);
+    expect(planStatus(run([{ type: 'setEngine', engine: 'craft' }], s))).toBe('outdated');
+  });
+
+  it('remembers the choice on this device, and drops anything unknown', () => {
+    expect(hydrate(JSON.parse(serialize(run([{ type: 'setEngine', engine: 'craft' }])))).brief.engine).toBe('craft');
+    expect(hydrate({ brief: { engine: 'gimp' } }).brief.engine).toBe('adobe');
   });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getTemplate } from '../state/catalog';
+import { ENGINES, ENGINE_IDS, type EngineId } from '../state/engines';
 import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS, planStatus } from '../state/flow';
 import { parsePlan, type DesignPlan } from '../state/plan';
 import { PlanPanel } from './PlanPanel';
@@ -13,7 +14,7 @@ import { ChoiceCheck, GuidedStepper, rise } from './ui';
 import { Thumb } from './Thumb';
 import type { PageProps } from './pages';
 
-const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'Production is offline. Start the studio app with “npm run dev” on the computer that has Photoshop and Illustrator.' };
+const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'Production is offline. Start the studio app with “npm run dev” on the computer that has the drawing apps (Photoshop + Illustrator, or PhotoCraft + VectorCraft).' };
 const PLAN_LABEL = { none: 'Not made yet', current: 'Ready to approve', outdated: 'Out of date — plan again' } as const;
 const STATUS_LABEL: Record<JobView['status'], string> = { queued: 'Waiting', running: 'Working…', review: 'Your review', done: 'Finished', failed: 'Needs attention' };
 const ROLE_LABEL: Record<SkillRole, string> = { orchestration: 'Master flow', style: 'Art style', artwork: 'Artwork', general: 'General skill' };
@@ -144,6 +145,16 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
   const canPlan = canRun;
   const briefDone = brief.prompt.trim() !== '';
   const referenceDone = !brief.referenceName || Boolean(brief.referenceRole);
+  /** each pair of drawing apps as the bridge sees it (an older bridge says nothing: assume usable) */
+  const engineState = (id: EngineId) => bridge.health?.engines?.[id] ?? null;
+  const usable = (id: EngineId) => engineState(id)?.ok !== false;
+  const engine = ENGINES[brief.engine];
+  // The picked apps are not connected but the other pair is: switch, so the designer never starts on a dead choice.
+  const pickedUsable = usable(brief.engine);
+  const fallback = pickedUsable ? null : ENGINE_IDS.find(usable) ?? null;
+  useEffect(() => {
+    if (fallback) dispatch({ type: 'setEngine', engine: fallback });
+  }, [fallback, dispatch]);
 
   if (!template) {
     return (
@@ -162,6 +173,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
     brief: brief.prompt,
     templateId: brief.templateId,
     text: brief.displayName,
+    engine: brief.engine,
     reference: brief.referenceName && state.referencePreview && brief.referenceRole ? { dataUrl: state.referencePreview, role: brief.referenceRole } : null,
   });
 
@@ -187,6 +199,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
   const submit = async () => {
     setError(null);
     if (issues.length > 0 || !style) return dispatch({ type: 'showErrors' });
+    if (canRun && !pickedUsable) return setError(`${engine.label} is not connected: ${engineState(brief.engine)?.detail ?? ''}`.trim());
     if (canPlan && plan !== 'current') return void makePlan();
     let approved: DesignPlan | null = null;
     if (canPlan && state.plan) {
@@ -211,6 +224,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
     ['Client brief', briefDone, briefDone ? 'Written' : 'Not written yet'],
     ['Reference', referenceDone, brief.referenceName ? (brief.referenceRole ?? 'Say how to use it') : 'None (optional)'],
     ['Size', true, ratioLabel(brief.ratio)],
+    ['Drawing apps', pickedUsable, engine.label],
     ...(canPlan ? [['Design plan', plan === 'current', PLAN_LABEL[plan]] as [string, boolean, string]] : []),
   ];
   const busy = sending || planning;
@@ -222,7 +236,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
       <div className="stage-head">
         <div>
           <h1 id="page-title" tabIndex={-1}>Brief for {template.title}</h1>
-          <p className="stage-sub">Four quick things. Claude plans the design, you approve it, then it is drawn in Photoshop and Illustrator.</p>
+          <p className="stage-sub">A few quick things. Claude plans the design, you approve it, then it is drawn in {engine.apps.Photoshop} and {engine.apps.Illustrator}.</p>
         </div>
         <button type="button" className="btn" onClick={() => dispatch({ type: 'back' })}><span aria-hidden>← </span>Change artwork</button>
       </div>
@@ -323,10 +337,28 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
             </div>
           </div>
 
+          <div className="glass panel" role="group" aria-labelledby="title-apps">
+            <p id="title-apps" className="step-title"><span className={`step-num ${pickedUsable ? 'is-done' : ''}`} aria-hidden>{pickedUsable ? <IconCheck width={14} height={14} strokeWidth={3.5} /> : 5}</span> Draw with</p>
+            <p className="help">The apps the agent draws this job in. Both give a layered PSD and an Illustrator file, every part on its own layer.</p>
+            <div role="radiogroup" aria-label="Draw with" className="pill-row">
+              {ENGINE_IDS.map((id) => {
+                const on = brief.engine === id;
+                const why = usable(id) ? null : engineState(id)?.detail ?? null;
+                return (
+                  <button key={id} type="button" role="radio" aria-checked={on} disabled={!usable(id)} className={`choice-pill ${on ? 'is-on' : ''}`} onClick={() => dispatch({ type: 'setEngine', engine: id })}>
+                    {on && <ChoiceCheck />} {ENGINES[id].label}
+                    {why && <span className="block text-[12px] font-normal text-[var(--text-secondary)]">Not connected: {why}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {canPlan && state.plan && (
             <PlanPanel
               plan={state.plan.plan}
               madeIn={template.madeIn}
+              engine={brief.engine}
               outdated={plan === 'outdated'}
               busy={busy}
               onChange={(p) => dispatch({ type: 'editPlan', plan: p })}

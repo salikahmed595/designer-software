@@ -45,11 +45,11 @@ export const agentArgs = (base: string[], account: AgentAccount, mcpConfigFile: 
   account.kind === 'apikey' ? ['--bare', '--mcp-config', mcpConfigFile, ...base] : base;
 
 /** The photoshop / illustrator / design-assets MCP entries from ~/.claude.json, as an --mcp-config file body. */
-export function mcpServersFor(claudeJsonText: string): { mcpServers: Record<string, unknown> } {
+export function mcpServersFor(claudeJsonText: string, drawingServers: readonly string[] = ['photoshop', 'illustrator']): { mcpServers: Record<string, unknown> } {
   const out: Record<string, unknown> = {};
   try {
     const servers = (JSON.parse(claudeJsonText) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {};
-    for (const name of ['photoshop', 'illustrator', 'design-assets']) if (servers[name]) out[name] = servers[name];
+    for (const name of [...drawingServers, 'design-assets']) if (servers[name]) out[name] = servers[name];
   } catch {
     /* unreadable config: no connectors */
   }

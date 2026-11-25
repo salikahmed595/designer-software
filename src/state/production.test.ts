@@ -72,6 +72,24 @@ describe('hand-made: the client’s own design, drawn by a designer from a job s
     const r = validateJobRequest(MAP, good);
     expect(r.ok && r.job.handmade).toBeNull();
   });
+
+  it('keeps the designer’s choice of drawing apps; missing = Adobe; anything else is refused', () => {
+    const craft = validateJobRequest(MAP, { ...good, engine: 'craft' });
+    expect(craft.ok && craft.job.engine).toBe('craft');
+    const none = validateJobRequest(MAP, good);
+    expect(none.ok && none.job.engine).toBe('adobe');
+    const bad = validateJobRequest(MAP, { ...good, engine: 'gimp' });
+    expect(bad.ok).toBe(false);
+    expect(!bad.ok && bad.errors.join(' ')).toMatch(/drawing apps/);
+  });
+
+  it('the older (non-orchestrated) prompt follows the engine too', () => {
+    const r = validateJobRequest(MAP, { ...good, engine: 'craft' });
+    if (!r.ok) throw new Error(r.errors.join(' '));
+    const p = buildAgentPrompt(r.job, 'D:/jobs/abc123');
+    expect(p).toContain('PhotoCraft and/or VectorCraft');
+    expect(p).not.toContain('Adobe');
+  });
 });
 
 const PNG = 'data:image/png;base64,iVBORw0KGgo=';

@@ -8,6 +8,7 @@
  */
 import { ART_STYLES } from './styles';
 import type { ProductionJob } from './production';
+import { engineOf } from './engines';
 
 export const PLAN_APPS = ['Illustrator', 'Photoshop'] as const;
 export type PlanApp = (typeof PLAN_APPS)[number];
@@ -121,6 +122,13 @@ const APP_RULE: Record<string, string> = {
 };
 
 /** Instructions for the planner. It reads files and writes nothing: its reply is the plan. */
+/** The apps the designer picked; a plan keeps the role names "Illustrator" (vector) and "Photoshop" (painted). */
+function drawnIn(job: ProductionJob): string {
+  const e = engineOf(job.engine);
+  if (e.id === 'adobe') return 'Adobe Photoshop and Illustrator';
+  return `${e.apps.Photoshop} and ${e.apps.Illustrator} (in the plan, "Illustrator" means ${e.apps.Illustrator}, the vector app, and "Photoshop" means ${e.apps.Photoshop}, the painting app)`;
+}
+
 export function buildPlanPrompt(job: ProductionJob, planDir: string): string {
   const dir = planDir.replace(/\\/g, '/');
   return [
@@ -130,7 +138,7 @@ export function buildPlanPrompt(job: ProductionJob, planDir: string): string {
     job.reference ? `2. Look at the reference image ${dir}/reference.${job.reference.ext} (its role is in brief.json).` : '2. There is no reference image.',
     '3. Plan ONE finished artwork in the chosen art style. If a designer note is given, revise the previous plan to follow it and keep everything else.',
     `   ${APP_RULE[job.madeIn ?? 'Illustrator + Photoshop']}`,
-    '   It will be drawn by hand, shape by shape, in Adobe Photoshop and Illustrator, with free licence-checked icons, open fonts and CC0 textures available. No AI image generation.',
+    `   It will be drawn by hand, shape by shape, in ${drawnIn(job)}, with free licence-checked icons, open fonts and CC0 textures available. No AI image generation.`,
     '',
     'Reply with only the JSON object below, filled in. No other text.',
     '{',

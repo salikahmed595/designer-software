@@ -143,6 +143,69 @@ describe('the production guard (PreToolUse hook)', () => {
   });
 });
 
+const CRAFT_JSON = JSON.stringify({
+  mcpServers: {
+    ...JSON.parse(CLAUDE_JSON).mcpServers,
+    photocraft: { type: 'stdio', command: 'C:\\ArtCraft\\photocraft-cli.exe', args: ['mcp', '--automation-read-root', 'C:\\Users\\salik\\Documents\\PhotoCraft-Work', '--automation-write-root', 'C:\\Users\\salik\\Documents\\PhotoCraft-Work'], env: {} },
+    vectorcraft: { type: 'stdio', command: 'C:\\ArtCraft\\vectorcraft-cli.exe', args: ['mcp', '--automation-read-root=D:\\', '--automation-write-root', 'D:\\'], env: {} },
+  },
+});
+
+describe('PhotoCraft + VectorCraft jobs (engine "craft")', () => {
+  it('give the agent only the Craft connectors, each rooted in the production folder for reading and writing', () => {
+    const cfg = productionMcpConfig(CRAFT_JSON, paths, 'craft');
+    expect(Object.keys(cfg.mcpServers).sort()).toEqual(['design-assets', 'photocraft', 'vectorcraft']);
+    const both = ['mcp', '--automation-read-root', paths.production, '--automation-write-root', paths.production];
+    expect(cfg.mcpServers.photocraft.args).toEqual(both);
+    expect(cfg.mcpServers.vectorcraft.args).toEqual(both);
+    // the Adobe config is unchanged and never includes the Craft apps
+    expect(Object.keys(productionMcpConfig(CRAFT_JSON, paths).mcpServers).sort()).toEqual(['design-assets', 'illustrator', 'photoshop']);
+  });
+
+  it('allow only the Craft tools, and deny window control', () => {
+    const args = productionArgs({ label: 'login', kind: 'login', secret: null }, { mcp: 'm.json', settings: 's.json' }, 'craft');
+    const allowed = args[args.indexOf('--allowedTools') + 1].split(',');
+    expect(allowed).toEqual(expect.arrayContaining(['mcp__photocraft', 'mcp__vectorcraft', 'mcp__design-assets', 'Skill', 'Write']));
+    expect(allowed).not.toContain('mcp__photoshop');
+    const denied = args[args.indexOf('--disallowedTools') + 1].split(',');
+    expect(denied).toEqual(expect.arrayContaining(['Bash', 'mcp__vectorcraft__pointer_gesture', 'mcp__photocraft__control_call']));
+    const s = productionSettings(paths, { node: 'node', configFile: 'g.json' }, 'craft');
+    expect(s.permissions.deny).toContain('mcp__photocraft__ui_pointer');
+  });
+
+  describe('the guard', () => {
+    const cfg = () => guardConfig(paths, path.join(tmp, 'jobs'), 'craft');
+    const call = (tool_name: string, tool_input: Record<string, unknown>) => decide({ tool_name, tool_input, cwd: paths.production }, cfg());
+
+    it('refuses the concept, the other engine, window control and Image Trace commands', () => {
+      expect(call('mcp__photocraft__doc_place', { path: conceptFile }).allow).toBe(false);
+      expect(call('mcp__vectorcraft__open_file', { path: '../concepts/reference_only/concept-v1.png' }).allow).toBe(false);
+      expect(call('mcp__photoshop__doc_new', {}).allow).toBe(false);
+      expect(call('mcp__vectorcraft__pointer_gesture', {}).allow).toBe(false);
+      expect(call('mcp__vectorcraft__command_run', { id: 'imageTrace.makeAndExpand', params: {} }).allow).toBe(false);
+      expect(call('mcp__vectorcraft__run_command', { command: 'ImageTrace.make' }).allow).toBe(false);
+      expect(call('mcp__vectorcraft__command_batch', { commands: [{ id: 'object.group' }, { id: 'addon.document.batchTraceFolder' }] }).allow).toBe(false);
+      expect(call('mcp__photocraft__doc_save', { path: path.join(tmp, 'out.psd') }).allow).toBe(false);
+    });
+
+    it('allows normal Craft work inside the production folder', () => {
+      expect(call('mcp__vectorcraft__command_run', { id: 'file.new', params: { width: 1280, height: 720, units: 'Pixels' } }).allow).toBe(true);
+      expect(call('mcp__vectorcraft__draw_path', { d: 'M0 0 C10 10 20 10 30 0 Z', fill: '#ff0000', stroke: 'none', name: 'Flame' }).allow).toBe(true);
+      expect(call('mcp__vectorcraft__save_file', { path: 'output/artwork.ai' }).allow).toBe(true);
+      expect(call('mcp__photocraft__doc_place', { path: 'parts/flame.svg' }).allow).toBe(true);
+      expect(call('mcp__photocraft__doc_save', { path: path.join(paths.output, 'artwork.psd') }).allow).toBe(true);
+      expect(call('mcp__photocraft__command_batch', { commands: [{ id: 'layer.new.layer', params: { name: 'Glow' } }] }).allow).toBe(true);
+    });
+
+    it('keeps the Adobe guard as it was', () => {
+      const adobe = (tool_name: string, tool_input: Record<string, unknown>) => decide({ tool_name, tool_input, cwd: paths.production }, guardConfig(paths, path.join(tmp, 'jobs')));
+      expect(adobe('mcp__photocraft__doc_new', {}).allow).toBe(false);
+      expect(adobe('mcp__photoshop__doc_new', {}).allow).toBe(true);
+      expect(adobe('mcp__illustrator__trace', {}).allow).toBe(false);
+    });
+  });
+});
+
 /** Runs the guard exactly like Claude Code does: JSON on stdin; exit 2 = blocked (stderr goes to the agent). */
 function runGuard(configFile: string, input: unknown): Promise<{ code: number | null; stderr: string }> {
   return new Promise((resolve) => {

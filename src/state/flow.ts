@@ -7,6 +7,7 @@
  */
 import { getTemplate } from './catalog';
 import type { DesignPlan } from './plan';
+import { DEFAULT_ENGINE, ENGINE_IDS, type EngineId } from './engines';
 
 export type Page = 'home' | 'brief' | 'jobs' | 'skills';
 
@@ -36,6 +37,8 @@ export interface Brief {
   ratio: Ratio;
   /** hand-made only: approved differences from the original (empty = exact copy) */
   changes: Changes;
+  /** the drawing apps the designer picked for this job */
+  engine: EngineId;
 }
 
 export interface FlowState {
@@ -62,6 +65,7 @@ export type FlowAction =
   | { type: 'clearReference' }
   | { type: 'setReferenceRole'; role: RefRole }
   | { type: 'setRatio'; ratio: Ratio }
+  | { type: 'setEngine'; engine: EngineId }
   | { type: 'addChange'; list: keyof Changes; text: string }
   | { type: 'removeChange'; list: keyof Changes; index: number }
   | { type: 'showErrors' }
@@ -74,7 +78,7 @@ export type FlowAction =
 
 const emptyBrief = (): Brief => ({
   templateId: null, artStyleId: null, prompt: '', displayName: '', referenceName: null, referenceRole: null, ratio: 'Auto',
-  changes: { add: [], remove: [] },
+  changes: { add: [], remove: [] }, engine: DEFAULT_ENGINE,
 });
 
 /** A clean change list from anything (typed text or stored data): trimmed, capped, no blanks. */
@@ -91,7 +95,7 @@ export const initialFlow = (): FlowState => ({ page: 'home', brief: emptyBrief()
 
 /** Everything Claude planned from: if any of it changes, the plan is out of date. */
 export const briefSignature = (b: Brief): string =>
-  JSON.stringify([b.templateId, b.artStyleId, b.prompt.trim(), b.displayName.trim(), b.ratio, b.referenceName, b.referenceRole]);
+  JSON.stringify([b.templateId, b.artStyleId, b.prompt.trim(), b.displayName.trim(), b.ratio, b.referenceName, b.referenceRole, b.engine]);
 
 export type PlanStatus = 'none' | 'current' | 'outdated';
 export const planStatus = (state: FlowState): PlanStatus =>
@@ -124,6 +128,8 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return patch(state, { referenceRole: action.role });
     case 'setRatio':
       return patch(state, { ratio: action.ratio });
+    case 'setEngine':
+      return patch(state, { engine: action.engine });
     case 'addChange': {
       const next = cleanChanges([...state.brief.changes[action.list], action.text]);
       return patch(state, { changes: { ...state.brief.changes, [action.list]: next } });
@@ -168,6 +174,7 @@ export function hydrate(raw: unknown): FlowState {
       prompt: typeof b.prompt === 'string' ? b.prompt.slice(0, MAX_BRIEF_CHARS) : '',
       displayName: typeof b.displayName === 'string' ? b.displayName.slice(0, MAX_TEXT) : '',
       ratio: RATIOS.find((x) => x === b.ratio) ?? 'Auto',
+      engine: ENGINE_IDS.find((x) => x === b.engine) ?? DEFAULT_ENGINE,
       changes: {
         add: cleanChanges((b.changes as Record<string, unknown> | undefined)?.add),
         remove: cleanChanges((b.changes as Record<string, unknown> | undefined)?.remove),

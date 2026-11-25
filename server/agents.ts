@@ -1,8 +1,8 @@
 /**
  * The real workers behind the orchestrator (dev server only, this computer only):
  *  - the concept generator: OpenAI Images, server-side, key read per request and never logged or returned;
- *  - the creator: a Claude Code agent with only the per-job Photoshop/Illustrator connectors (allowed root =
- *    the job's production folder), the guard hook and deny rules from ./gate, started in that folder;
+ *  - the creator: a Claude Code agent with only the per-job drawing-app connectors (Adobe or PhotoCraft/VectorCraft,
+ *    rooted in the job's production folder), the guard hook and deny rules from ./gate, started in that folder;
  *  - the independent verifier: a separate, read-only Claude Code run with no connectors and no write tools.
  * The orchestrator decides what happens next from files and verdicts, never from what these say about themselves.
  */
@@ -10,12 +10,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { STAGE_LABEL, type Stage } from '../src/state/orchestration';
 import { accountProblem } from '../src/state/production';
-import { agentAccounts, agentArgs, agentEnv, bareSkillNote, runWithFallback } from './accounts';
+import { agentAccounts, agentArgs, agentEnv, bareSkillNote, runWithFallback, type AgentAccount } from './accounts';
 import { readVerifierReply } from '../src/state/orchestration';
 import { productionArgs } from './gate';
+import { engineOf } from '../src/state/engines';
 import { DEFAULT_IMAGE_MODEL, generateConceptImage, keyFiles, readOpenAiKey } from './openai';
 import { runProcess } from './process';
-import type { OrchestratorDeps, VerifierRun } from './orchestrator';
+import type { CreatorRun, OrchestratorDeps, VerifierRun } from './orchestrator';
 
 type Env = Record<string, string | undefined>;
 
@@ -81,6 +82,10 @@ export function verifierPrompt(run: VerifierRun): string {
   ].join('\n');
 }
 
+/** The drawing agent's command line: only the connectors of the apps this job is drawn in. */
+export const creatorArgs = (acct: AgentAccount, run: Pick<CreatorRun, 'files' | 'job'>): string[] =>
+  productionArgs(acct, run.files, engineOf(run.job.engine).id);
+
 export function realDeps(o: { env: Env; claudeBin: string; appDir: string; skillDirs: () => string[] }): Pick<OrchestratorDeps, 'generateConcept' | 'runCreator' | 'runVerifier'> {
   const { env, claudeBin } = o;
   return {
@@ -95,7 +100,7 @@ export function realDeps(o: { env: Env; claudeBin: string; appDir: string; skill
       const result = await runWithFallback(agentAccounts(env), async (acct, i) => {
         if (i > 0) await fs.rename(run.logFile, run.logFile.replace(/\.log$/, `-account-${i}.log`)).catch(() => undefined);
         const note = acct.kind === 'apikey' ? bareSkillNote(await skillFiles(run.job.skills.map((s) => s.name), o.skillDirs())) : '';
-        const code = await runProcess(claudeBin, productionArgs(acct, run.files), run.paths.production, run.prompt + note, CREATOR_TIMEOUT_MS, run.logFile, agentEnv(env, acct), run.signal);
+        const code = await runProcess(claudeBin, creatorArgs(acct, run), run.paths.production, run.prompt + note, CREATOR_TIMEOUT_MS, run.logFile, agentEnv(env, acct), run.signal);
         if (run.signal.aborted) return { problem: null, value: code };
         const wrote = await fs.stat(path.join(run.paths.production, 'stages')).then(() => true, () => false);
         const log = wrote ? '' : await fs.readFile(run.logFile, 'utf8').catch(() => '');

@@ -35,6 +35,10 @@ import path from 'node:path';
 import type { Plugin } from 'vite';
 import { accountsSummary, agentAccounts, agentArgs, agentEnv, bareSkillNote, mcpServersFor, runWithFallback } from './accounts';
 import { ensureAdobe, readRegisteredServers } from './adobe';
+import { ensureCraft, readCraftServers } from './craft';
+import { productionAllowedTools } from './gate';
+import { combineReadiness, engineRefusal, type EnginesReadiness } from './readiness';
+import { ENGINES, engineOf } from '../src/state/engines';
 import { runProcess } from './process';
 import { openAiKeyStatus, realDeps } from './agents';
 import { mockConcept, mockCreate, mockVerify } from './mock-runner';
@@ -53,8 +57,6 @@ import {
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const AGENT_TIMEOUT_MS = 45 * 60 * 1000;
-/** The agent can draw in the Adobe apps and read/write files — no shell, no network tools. */
-const ALLOWED_TOOLS = 'mcp__photoshop,mcp__illustrator,mcp__design-assets,Skill,Read,Write,Edit,Glob,Grep';
 const PLAN_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_PLANS_AT_ONCE = 2;
 /**
@@ -123,6 +125,8 @@ export function productionBridge(): Plugin {
   let planning = 0;
   let runner: RunnerKind = 'off';
   let detail = 'Checking for the Claude Code agent…';
+  /** each pair of drawing apps, checked on its own: a job drawn in a pair that is not ready is refused */
+  let engines: EnginesReadiness = { adobe: { ok: false, detail: 'Not checked yet.' }, craft: { ok: false, detail: 'Not checked yet.' } };
   const mockRunner = process.env.LUMORA_RUNNER === 'mock';
 
   /** AI-assisted jobs: the master orchestration decides every step, from files and verdicts. */
@@ -132,6 +136,7 @@ export function productionBridge(): Plugin {
     runnerKind: () => runner,
     claudeJson: () => fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => ''),
     nodeBin: process.execPath,
+    engineReady: (e) => (runner === 'claude' && !engines[e].ok ? engines[e].detail : null),
     missingSkills: async (names) => {
       if (runner !== 'claude') return [];
       const have = new Set((await listSkills(skillDirs())).map((x) => x.name));
@@ -166,18 +171,26 @@ export function productionBridge(): Plugin {
     if (wanted === 'mock') {
       runner = 'mock';
       detail = 'Demo runner: jobs finish with a placeholder image. No artwork is made.';
+      engines = { adobe: { ok: true, detail: 'Demo runner.' }, craft: { ok: true, detail: 'Demo runner.' } };
     } else if (wanted === 'off') {
       detail = 'The runner is switched off (LUMORA_RUNNER=off). Jobs are saved but not started.';
     } else if ((await runProcess(claudeBin, ['--version'], jobsDir, null, 20_000, null)) === 0) {
-      // Claude Code is here: make sure the Photoshop 2023 / Illustrator 2022 connectors are registered and installed.
+      // Claude Code is here: check both pairs of drawing apps — the Photoshop 2023 / Illustrator 2022 connectors
+      // and PhotoCraft / VectorCraft. The agent runs when at least one pair is ready; the designer picks per job.
       const claudeJson = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => '');
-      const adobe = await ensureAdobe({ claudeBin, roots: [os.homedir(), jobsDir], registered: readRegisteredServers(claudeJson) });
-      runner = adobe.ok ? 'claude' : 'off';
+      const [adobe, craft] = await Promise.all([
+        ensureAdobe({ claudeBin, roots: [os.homedir(), jobsDir], registered: readRegisteredServers(claudeJson) }),
+        ensureCraft({ registered: readCraftServers(claudeJson) }),
+      ]);
+      const both = combineReadiness(adobe, craft);
+      runner = both.runner;
+      engines = both.engines;
       // Free, licence-checked assets (icons, fonts, textures, public-domain art). Optional: drawing works without them.
       const assets = await ensureDesignAssets({
         claudeBin, claudeJson, nodeBin: process.execPath, serverFile: path.resolve('mcp/design-assets/server.mjs'), roots: [jobsDir, path.join(os.homedir(), 'Documents', 'Lumora-assets')],
       });
-      detail = [adobe.detail, adobe.ok ? accountsSummary(agentAccounts(process.env)) : '', adobe.ok && !assets.ok ? assets.message : ''].filter(Boolean).join(' ');
+      const on = runner === 'claude';
+      detail = [both.detail, on ? accountsSummary(agentAccounts(process.env)) : '', on && !assets.ok ? assets.message : ''].filter(Boolean).join(' ');
     } else {
       detail = 'The drawing agent is not set up on this computer yet, so jobs are saved but cannot start. Ask your studio admin — the setup steps are in the README.';
     }
@@ -209,7 +222,8 @@ export function productionBridge(): Plugin {
   async function runJob(job: StoredJob): Promise<void> {
     const out = path.join(job.dir, 'output');
     await fs.mkdir(out, { recursive: true });
-    const args = ['-p', '--allowedTools', ALLOWED_TOOLS];
+    // The agent can draw in the job's apps and read/write files — no shell, no network tools.
+    const args = ['-p', '--allowedTools', productionAllowedTools(engineOf(job.engine).id)];
     const logFile = path.join(job.dir, 'agent.log');
     let exitCode: number | null;
     let account: string | null = null;
@@ -259,11 +273,11 @@ export function productionBridge(): Plugin {
     await update(job.id, { status: verdict.status, message, layers: verdict.layers, hasPreview, files, account });
   }
 
-  /** API-key runs use --bare: pass the Adobe connectors in, and say where the skill files are. */
+  /** API-key runs use --bare: pass the job's drawing-app connectors in, and say where the skill files are. */
   async function bareSetup(job: StoredJob): Promise<{ mcpFile: string; note: string }> {
     const mcpFile = path.join(job.dir, 'mcp.json');
     const claudeJson = await fs.readFile(path.join(os.homedir(), '.claude.json'), 'utf8').catch(() => '');
-    await fs.writeFile(mcpFile, JSON.stringify(mcpServersFor(claudeJson), null, 2));
+    await fs.writeFile(mcpFile, JSON.stringify(mcpServersFor(claudeJson, ENGINES[engineOf(job.engine).id].servers), null, 2));
     const skills: Array<{ name: string; file: string }> = [];
     for (const s of job.skills) {
       for (const dir of skillDirs()) {
@@ -351,7 +365,7 @@ export function productionBridge(): Plugin {
     const createdAt = Date.now();
     const mode = job.handmade?.mode ?? null;
     const briefExcerpt = job.brief === '' && mode ? 'Exact copy of the client’s original' : job.brief.length > 140 ? `${job.brief.slice(0, 140)}…` : job.brief;
-    const base = { id, dir, createdAt, styleName: job.styleName, skills: job.skills, ratio: job.ratio, templateTitle: job.templateTitle, briefExcerpt, runner, handmade: mode, layers: null, hasPreview: false };
+    const base = { id, dir, createdAt, engine: engineOf(job.engine).id, styleName: job.styleName, skills: job.skills, ratio: job.ratio, templateTitle: job.templateTitle, briefExcerpt, runner, handmade: mode, layers: null, hasPreview: false };
 
     // Hand-made: no agent at all, ever (the hand-made skill forbids agent drawing). The sheet is built from the designer's notes and the hand-made skill's text.
     if (mode === 'strict') {
@@ -383,7 +397,7 @@ export function productionBridge(): Plugin {
     const route = url.slice('/api/production/'.length);
 
     if (req.method === 'GET' && route === 'health') {
-      const health: BridgeHealth = { online: true, runner, detail };
+      const health: BridgeHealth = { online: true, runner, detail, engines };
       return send(res, 200, health);
     }
     if (req.method === 'GET' && route === 'skills') {
@@ -489,6 +503,9 @@ export function productionBridge(): Plugin {
         return send(res, 409, { error: `The skill ${missing.join(' and ')} is not installed on this computer, so this can’t be drawn yet. Pick another one on the Skills screen.` });
       }
     }
+    // The designer picked the drawing apps for this job: if that pair is not connected, say so now and stop.
+    const notReady = checked.job.handmade?.mode === 'strict' ? null : engineRefusal(runner, engines, checked.job.engine);
+    if (notReady) return send(res, 409, { error: notReady });
     if (!checked.job.handmade) return send(res, 201, { job: await orch.create(checked.job) });
     const { dir: _dir, ...view } = await createJob(checked.job);
     return send(res, 201, { job: view });

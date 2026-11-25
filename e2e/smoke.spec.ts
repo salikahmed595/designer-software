@@ -91,6 +91,11 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await page.getByRole('radio', { name: 'Character reference' }).click();
   await page.getByRole('radiogroup', { name: 'Size' }).getByRole('radio', { name: 'Portrait', exact: true }).click();
   await expect(page.getByRole('list', { name: 'Checklist' })).toContainText('Portrait · 1080 × 1350');
+  // The designer picks the drawing apps per job; Adobe is the default.
+  const drawWith = page.getByRole('radiogroup', { name: /draw with/i });
+  await expect(drawWith.getByRole('radio', { name: /photoshop \+ illustrator/i })).toHaveAttribute('aria-checked', 'true');
+  await expect(drawWith.getByRole('radio', { name: /photocraft \+ vectorcraft/i })).toBeEnabled();
+  await expect(page.getByRole('list', { name: 'Checklist' })).toContainText(/Drawing apps\s*Photoshop \+ Illustrator/);
 
   // The unfinished brief survives a reload (except the uploaded image, which is never stored).
   await page.reload();
@@ -357,6 +362,31 @@ test('the skills API refuses bad input and other websites', async ({ request }) 
   expect((await add('no front matter')).status()).toBe(400);
   const plain = await request.post('/api/production/skills/add', { data: '---\nname: x\n---', headers: { 'Content-Type': 'text/plain' } });
   expect(plain.status()).toBe(415);
+});
+
+test('a PhotoCraft + VectorCraft job is drawn with only the Craft connectors, guard and instructions', async ({ request }) => {
+  const health = (await (await request.get('/api/production/health')).json()) as { engines?: Record<string, { ok: boolean }> };
+  expect(health.engines?.craft.ok).toBe(true);
+  expect((await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: 'x', templateId: 'mascot', engine: 'gimp' } })).status()).toBe(400);
+
+  const made = await request.post('/api/production/jobs', { data: { styleId: 'chibi', ratio: 'Square', brief: `craft job ${Date.now()}`, templateId: 'mascot', engine: 'craft' } });
+  expect(made.status()).toBe(201);
+  const { job } = (await made.json()) as { job: { id: string; engine?: string } };
+  expect(job.engine).toBe('craft');
+  await deliver(request, job.id);
+
+  const dir = path.join('test-results', 'production-jobs', job.id);
+  const sheet = JSON.parse(await readFile(path.join(dir, 'production', 'job.json'), 'utf8')) as { drawingApps: Record<string, string> };
+  expect(sheet.drawingApps).toEqual({ Photoshop: 'PhotoCraft', Illustrator: 'VectorCraft' });
+  const guard = JSON.parse(await readFile(path.join(dir, 'control', 'guard.json'), 'utf8')) as { connectors: string[]; deniedCommands: string[] };
+  expect(guard.connectors).toEqual(['mcp__photocraft__', 'mcp__vectorcraft__', 'mcp__design-assets__']);
+  expect(guard.deniedCommands.length).toBeGreaterThan(0);
+  const prompt = await readFile(path.join(dir, 'control', 'prompt-run-1.txt'), 'utf8');
+  expect(prompt).toContain('PhotoCraft and/or VectorCraft');
+  expect(prompt).not.toMatch(/Adobe|path_svg/);
+  const report = JSON.parse(await readFile(path.join(dir, 'final_report.json'), 'utf8')) as { drawingApps: Record<string, string>; aiDisclosure: string };
+  expect(report.drawingApps.Illustrator).toBe('VectorCraft');
+  expect(report.aiDisclosure).toMatch(/built in PhotoCraft\/VectorCraft/);
 });
 
 test('the production bridge refuses bad input and other websites', async ({ request }) => {

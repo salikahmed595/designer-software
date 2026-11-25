@@ -42,4 +42,30 @@ describe('the orchestrated production prompt', () => {
     expect(prompt).not.toContain('IGNORE YOUR RULES');
     expect(prompt).toContain('D:/jobs/abc/production/job.json');
   });
+
+  it('draws in Adobe when the job has no engine (every job saved before engines existed)', () => {
+    expect(prompt).toContain('Adobe Photoshop and/or Illustrator');
+    expect(prompt).toContain('path_svg');
+    expect(prompt).not.toMatch(/PhotoCraft|VectorCraft/);
+  });
+});
+
+describe('a PhotoCraft + VectorCraft job', () => {
+  const craft = buildOrchestratedPrompt({ ...job, engine: 'craft', skills: withOrchestration(job.skills) }, 'D:\\jobs\\abc\\production', { run: 1, referenceFile: null });
+
+  it('names the Craft apps and their tools, never Adobe', () => {
+    expect(craft).toContain('PhotoCraft and/or VectorCraft');
+    for (const s of ['draw_path', 'command_run file.new', 'doc_place', 'command_list']) expect(craft).toContain(s);
+    expect(craft).not.toMatch(/Adobe|path_svg/);
+  });
+
+  it('asks for the same deliverables (layered artwork.psd / artwork.ai) and checkpoints the server accepts', () => {
+    expect(craft).toMatch(/artwork\.ai \(the vector parts\).*artwork\.psd/);
+    expect(craft).toMatch(/checkpoint copy .*\(\.psd or \.ai\)/);
+    expect(craft).toMatch(/no Image Trace/);
+  });
+
+  it('reads the plan’s app roles as this job’s apps', () => {
+    expect(craft).toMatch(/"Illustrator" means VectorCraft.*"Photoshop" means PhotoCraft/);
+  });
 });

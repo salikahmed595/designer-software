@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, promises as fs } from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_ENGINE, ENGINES, type EngineId } from '../src/state/engines';
 import type { AgentAccount } from './accounts';
 import type { GuardConfig } from './production-guard.mjs';
 
@@ -45,13 +46,22 @@ export function jobPaths(root: string): JobPaths {
 
 /** Resolved from the app folder (the dev server runs there), like the design-assets server. */
 export const GUARD_SCRIPT = path.resolve(process.env.LUMORA_GUARD_SCRIPT?.trim() || 'server/production-guard.mjs');
-export const PRODUCTION_ALLOWED_TOOLS = 'mcp__photoshop,mcp__illustrator,mcp__design-assets,Skill,Read,Write,Edit,Glob,Grep';
-export const PRODUCTION_DENIED_TOOLS = ['Bash', 'PowerShell', 'WebFetch', 'WebSearch', 'NotebookEdit', 'mcp__illustrator__trace'];
+const FILE_TOOLS = ['mcp__design-assets', 'Skill', 'Read', 'Write', 'Edit', 'Glob', 'Grep'];
+/** Only this job's drawing apps, the free-assets connector and file tools. */
+export const productionAllowedTools = (engine: EngineId = DEFAULT_ENGINE): string => [...ENGINES[engine].toolPrefixes, ...FILE_TOOLS].join(',');
+const BASE_DENIED_TOOLS = ['Bash', 'PowerShell', 'WebFetch', 'WebSearch', 'NotebookEdit'];
+export const productionDeniedTools = (engine: EngineId = DEFAULT_ENGINE): string[] => [...BASE_DENIED_TOOLS, ...ENGINES[engine].deniedTools];
+/** The Adobe lists (kept for callers that predate engines). */
+export const PRODUCTION_ALLOWED_TOOLS = productionAllowedTools('adobe');
+export const PRODUCTION_DENIED_TOOLS = productionDeniedTools('adobe');
 
 const protectedDirs = (p: JobPaths) => [p.concepts, p.control, p.approvals, p.logs, p.plans, p.brief, p.exports];
 
-export const guardConfig = (p: JobPaths, jobsRoot: string): GuardConfig => ({
+export const guardConfig = (p: JobPaths, jobsRoot: string, engine: EngineId = DEFAULT_ENGINE): GuardConfig => ({
   production: p.production, allowedRoots: [p.production], deniedRoots: protectedDirs(p), jobsRoot: path.resolve(jobsRoot),
+  connectors: [...ENGINES[engine].toolPrefixes, 'mcp__design-assets'].map((t) => `${t}__`),
+  deniedTools: ENGINES[engine].deniedTools,
+  deniedCommands: ENGINES[engine].deniedCommands,
 });
 
 type McpEntry = { command?: unknown; args?: unknown; [k: string]: unknown };
@@ -72,8 +82,14 @@ function stripFlags(args: string[], flags: string[]): string[] {
   return out;
 }
 
-/** The registered connectors, rewritten so the production folder is their only root. */
-export function productionMcpConfig(claudeJsonText: string, p: JobPaths): { mcpServers: Record<string, McpEntry & { args: string[] }> } {
+/** How each connector is told which folders it may use (Adobe: one flag; Craft: separate read and write roots). */
+const ROOT_FLAGS: Record<EngineId, string[]> = {
+  adobe: ['--allowed-root'],
+  craft: ['--automation-read-root', '--automation-write-root'],
+};
+
+/** This job's drawing connectors (and design-assets), rewritten so the production folder is their only root. */
+export function productionMcpConfig(claudeJsonText: string, p: JobPaths, engine: EngineId = DEFAULT_ENGINE): { mcpServers: Record<string, McpEntry & { args: string[] }> } {
   let servers: Record<string, McpEntry> = {};
   try {
     servers = (JSON.parse(claudeJsonText) as { mcpServers?: Record<string, McpEntry> }).mcpServers ?? {};
@@ -82,9 +98,10 @@ export function productionMcpConfig(claudeJsonText: string, p: JobPaths): { mcpS
   }
   const out: Record<string, McpEntry & { args: string[] }> = {};
   const args = (e: McpEntry) => (Array.isArray(e.args) ? e.args.filter((a): a is string => typeof a === 'string') : []);
-  for (const app of ['photoshop', 'illustrator']) {
+  const flags = ROOT_FLAGS[engine];
+  for (const app of ENGINES[engine].servers) {
     const e = servers[app];
-    if (e && typeof e.command === 'string') out[app] = { ...e, args: [...stripFlags(args(e), ['--allowed-root']), '--allowed-root', p.production] };
+    if (e && typeof e.command === 'string') out[app] = { ...e, args: [...stripFlags(args(e), flags), ...flags.flatMap((f) => [f, p.production])] };
   }
   const assets = servers['design-assets'];
   if (assets && typeof assets.command === 'string') {
@@ -102,8 +119,8 @@ export function permissionPath(p: string): string {
 
 const fwd = (p: string) => p.replace(/\\/g, '/');
 
-export function productionSettings(p: JobPaths, opts: { node: string; configFile: string }) {
-  const deny = [...PRODUCTION_DENIED_TOOLS, ...protectedDirs(p).flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(${permissionPath(d)}/**)`))];
+export function productionSettings(p: JobPaths, opts: { node: string; configFile: string }, engine: EngineId = DEFAULT_ENGINE) {
+  const deny = [...productionDeniedTools(engine), ...protectedDirs(p).flatMap((d) => ['Read', 'Edit'].map((t) => `${t}(${permissionPath(d)}/**)`))];
   return {
     permissions: { deny },
     hooks: {
@@ -113,10 +130,10 @@ export function productionSettings(p: JobPaths, opts: { node: string; configFile
 }
 
 /** The drawing agent's arguments: only the per-job connectors, the guard settings, and no shell or web tools. */
-export function productionArgs(account: AgentAccount, files: { mcp: string; settings: string }): string[] {
+export function productionArgs(account: AgentAccount, files: { mcp: string; settings: string }, engine: EngineId = DEFAULT_ENGINE): string[] {
   return [
     ...(account.kind === 'apikey' ? ['--bare'] : []),
-    '-p', '--allowedTools', PRODUCTION_ALLOWED_TOOLS, '--disallowedTools', PRODUCTION_DENIED_TOOLS.join(','),
+    '-p', '--allowedTools', productionAllowedTools(engine), '--disallowedTools', productionDeniedTools(engine).join(','),
     '--strict-mcp-config', '--mcp-config', files.mcp, '--settings', files.settings,
   ];
 }

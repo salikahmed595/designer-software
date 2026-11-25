@@ -9,7 +9,7 @@ import { hasArt, indexThumbnails } from './glass/Thumb';
 import type { DesignPlan } from './state/plan';
 
 type Runner = 'claude' | 'off';
-interface StubOptions { jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string; rejectHandIn?: string; rejectPlan?: string; plan?: DesignPlan }
+interface StubOptions { engines?: Record<'adobe' | 'craft', { ok: boolean; detail: string }>; jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string; rejectHandIn?: string; rejectPlan?: string; plan?: DesignPlan }
 
 const PLAN: DesignPlan = {
   understood: 'A gamer portrait of a wolf wearing a neon headset.',
@@ -39,7 +39,7 @@ function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     if (runner === 'offline') throw new Error('offline');
     const json = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as Response;
-    if (url.endsWith('/health')) return json({ online: true, runner, detail: runner === 'claude' ? 'Connected: a Claude Code agent will draw.' : 'Claude Code was not found on this computer.' });
+    if (url.endsWith('/health')) return json({ online: true, runner, detail: runner === 'claude' ? 'Connected: a Claude Code agent will draw.' : 'Claude Code was not found on this computer.', ...(opts.engines ? { engines: opts.engines } : {}) });
     if (url.endsWith('/skills')) return json(state());
     if (url.endsWith('/skills/assign') && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
@@ -256,7 +256,7 @@ describe('step 2 — the brief', () => {
     await user.click(await screen.findByRole('button', { name: /approve plan and draw/i }));
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Jobs' })).toBeInTheDocument();
-    expect(posted).toEqual([{ styleId: 'pfp-cinematic', ratio: 'Square', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: 'NightWolf', reference: null, plan: PLAN }]);
+    expect(posted).toEqual([{ styleId: 'pfp-cinematic', ratio: 'Square', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: 'NightWolf', reference: null, engine: 'adobe', plan: PLAN }]);
     const job = within(screen.getByRole('list', { name: 'Jobs' })).getByRole('listitem');
     expect(job).toHaveTextContent(/gaming avatar/i);
     expect(job).toHaveTextContent(/waiting/i);
@@ -281,7 +281,7 @@ describe('step 3 — Claude plans the design, the designer approves it', () => {
     expect(screen.queryByRole('button', { name: /approve plan and draw/i })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /plan with claude/i }));
     expect(await screen.findByLabelText(/what the client wants/i)).toHaveValue(PLAN.understood);
-    expect(planCalls).toEqual([{ styleId: 'pfp-cinematic', ratio: 'Auto', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: '', reference: null }]);
+    expect(planCalls).toEqual([{ styleId: 'pfp-cinematic', ratio: 'Auto', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: '', reference: null, engine: 'adobe' }]);
     expect(posted).toHaveLength(0);
     expect(within(planPanel()).getByLabelText(/^concept/i)).toHaveValue(PLAN.concept);
     expect(within(planPanel()).getByDisplayValue('#00E5FF')).toBeInTheDocument();
@@ -343,6 +343,58 @@ describe('step 3 — Claude plans the design, the designer approves it', () => {
     await user.click(screen.getByRole('button', { name: /approve plan and draw/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/must list the parts to draw/i);
     expect(posted).toHaveLength(0);
+  });
+});
+
+describe('the designer picks the drawing apps per job', () => {
+  const fillBrief = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(within(artwork()).getByRole('button', { name: /gaming avatar/i }));
+    await user.click(screen.getByRole('radio', { name: /cinematic pfp/i }));
+    await user.type(screen.getByLabelText(/paste the client’s brief/i), 'A wolf gamer with a neon headset');
+  };
+  const drawWith = () => screen.getByRole('radiogroup', { name: /draw with/i });
+  const BOTH = { adobe: { ok: true, detail: 'Connected: Photoshop 2023, Illustrator 2022.' }, craft: { ok: true, detail: 'Connected: PhotoCraft 0.23.1, VectorCraft 0.24.1 (headless).' } };
+
+  it('offers Adobe and PhotoCraft + VectorCraft, starts on Adobe, and shows the choice in the checklist', async () => {
+    const { user } = setup('claude', { engines: BOTH });
+    await fillBrief(user);
+    expect(within(drawWith()).getByRole('radio', { name: /photoshop \+ illustrator/i })).toHaveAttribute('aria-checked', 'true');
+    expect(within(drawWith()).getByRole('radio', { name: /photocraft \+ vectorcraft/i })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('list', { name: 'Checklist' })).toHaveTextContent(/drawing apps\s*photoshop \+ illustrator/i);
+  });
+
+  it('plans and draws in PhotoCraft + VectorCraft when the designer picks them', async () => {
+    const { user, planCalls, posted } = setup('claude', { engines: BOTH });
+    await fillBrief(user);
+    await user.click(within(drawWith()).getByRole('radio', { name: /photocraft \+ vectorcraft/i }));
+    expect(screen.getByRole('list', { name: 'Checklist' })).toHaveTextContent(/drawing apps\s*photocraft \+ vectorcraft/i);
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    await user.click(await screen.findByRole('button', { name: /approve plan and draw/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Jobs' });
+    expect(planCalls[0]).toMatchObject({ engine: 'craft' });
+    expect(posted[0]).toMatchObject({ engine: 'craft' });
+  });
+
+  it('the plan names each part’s app as PhotoCraft or VectorCraft for a Craft job (the plan keeps its roles)', async () => {
+    const { user, posted } = setup('claude', { engines: BOTH });
+    await fillBrief(user);
+    await user.click(within(drawWith()).getByRole('radio', { name: /photocraft \+ vectorcraft/i }));
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    const head = await screen.findByDisplayValue('Wolf > Head');
+    const row = head.closest('li') as HTMLElement;
+    expect(within(row).getByRole('combobox')).toHaveDisplayValue('VectorCraft');
+    await user.click(screen.getByRole('button', { name: /approve plan and draw/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Jobs' });
+    expect((posted[0] as { plan: DesignPlan }).plan.parts.map((x) => x.app)).toEqual(['Photoshop', 'Illustrator']);
+  });
+
+  it('says why apps that are not connected can’t be picked, and switches to the pair that is', async () => {
+    const { user } = setup('claude', { engines: { adobe: { ok: false, detail: 'Photoshop 2023 is not installed.' }, craft: BOTH.craft } });
+    await fillBrief(user);
+    const adobe = within(drawWith()).getByRole('radio', { name: /photoshop \+ illustrator/i });
+    expect(adobe).toBeDisabled();
+    expect(drawWith()).toHaveTextContent(/photoshop 2023 is not installed/i);
+    expect(within(drawWith()).getByRole('radio', { name: /photocraft \+ vectorcraft/i })).toHaveAttribute('aria-checked', 'true');
   });
 });
 

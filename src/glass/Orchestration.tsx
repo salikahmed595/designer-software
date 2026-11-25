@@ -8,6 +8,7 @@ import {
   STAGES, STAGE_LABEL, type JobState, type Orchestration, type StageStatus,
 } from '../state/orchestration';
 import type { JobView } from '../state/production';
+import { appFor, engineOf } from '../state/engines';
 
 export type JobAction = 'concept/approve' | 'concept/reject' | 'final/approve' | 'final/reject' | 'resume' | 'cancel';
 export type Act = (id: string, action: JobAction, body?: Record<string, unknown>) => Promise<void>;
@@ -43,6 +44,7 @@ function Feedback({ label, button, onSend }: { label: string; button: string; on
 
 export function OrchestratedJob({ job, act }: { job: JobView & { orchestration: Orchestration }; act: Act }) {
   const o = job.orchestration;
+  const engine = engineOf(job.engine);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const run = async (action: JobAction, body?: Record<string, unknown>) => {
@@ -73,7 +75,7 @@ export function OrchestratedJob({ job, act }: { job: JobView & { orchestration: 
       {o.state === 'CONCEPT_REVIEW' && latest && (
         <section className="orch-review" aria-label="Concept review">
           <img className="orch-concept" src={`/api/production/jobs/${job.id}/concepts/${latest.version}`} alt={`AI concept version ${latest.version}`} />
-          <p className="orch-note">Concept v{latest.version} — made by AI as a <strong>reference only</strong>. It is never placed, traced or painted over: the artwork is drawn from scratch in Photoshop / Illustrator after you approve.</p>
+          <p className="orch-note">Concept v{latest.version} — made by AI as a <strong>reference only</strong>. It is never placed, traced or painted over: the artwork is drawn from scratch in {engine.apps.Photoshop} / {engine.apps.Illustrator} after you approve.</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void run('concept/approve', { version: latest.version })}>Approve concept v{latest.version}</button>
           </div>
@@ -113,7 +115,7 @@ export function OrchestratedJob({ job, act }: { job: JobView & { orchestration: 
               <tbody>
                 {o.registry.map((a) => (
                   <tr key={a.id}>
-                    <th scope="row">{a.name}<span className="orch-app">{a.app}</span></th>
+                    <th scope="row">{a.name}<span className="orch-app">{appFor(engine.id, a.app)}</span></th>
                     {STAGES.map((s) => {
                       const st = a.stages[s];
                       const where = [st.checkpoint ? `checkpoint ${st.checkpoint.file}` : null, ...st.evidence.map((e) => `evidence ${e}`), st.reason, ...st.defects].filter(Boolean).join('\n');

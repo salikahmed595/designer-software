@@ -28,6 +28,7 @@ import {
   type DownloadFile, type JobView, type ProductionJob, type RunnerKind,
 } from '../src/state/production';
 import { ART_STYLES } from '../src/state/styles';
+import { appFor, engineOf, type EngineId } from '../src/state/engines';
 import { psdLayerCountOfFile } from './files';
 import { findConceptCopies, guardConfig, jobPaths, productionMcpConfig, productionSettings, sha256File, type JobPaths } from './gate';
 import type { ConceptImage } from './openai';
@@ -61,6 +62,8 @@ export interface OrchestratorDeps {
   runVerifier: (run: VerifierRun) => Promise<{ ok: true; verdicts: Verdict[] } | { ok: false; error: string }>;
   /** skill names that are not installed (production is refused while any is missing) */
   missingSkills?: (names: string[]) => Promise<string[]>;
+  /** null when the job's drawing apps are connected, else why not (production then waits for a human) */
+  engineReady?: (engine: EngineId) => string | null;
   /** creator runs per job before a human must step in */
   maxRuns?: number;
 }
@@ -171,7 +174,10 @@ export function createOrchestrator(deps: OrchestratorDeps) {
       case 'CONCEPT_QA': return 'Checking the concept…';
       case 'CONCEPT_REVIEW': return 'The concept is ready. Approve it, or say what to change. Nothing is drawn until you approve.';
       case 'CONCEPT_APPROVED': case 'ASSET_PLANNING': return deps.canRun() ? 'Concept approved. Planning the assets…' : 'Concept approved. Waiting for the drawing agent to be available on this computer.';
-      case 'PRODUCTION': return `Drawing in Photoshop / Illustrator (run ${o.productionRuns})…`;
+      case 'PRODUCTION': {
+        const e = engineOf(rec.job.engine);
+        return `Drawing in ${e.apps.Photoshop} / ${e.apps.Illustrator} (run ${o.productionRuns})…`;
+      }
       case 'STAGE_VERIFYING': return 'The independent verifier is checking every stage…';
       case 'STAGE_CORRECTING': return `Correcting ${o.corrections.length} finding${o.corrections.length === 1 ? '' : 's'}…`;
       case 'HUMAN_INTERVENTION_REQUIRED': return o.blocker;
@@ -185,7 +191,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
 
   function view(rec: Rec): JobView {
     return {
-      id: rec.id, createdAt: rec.createdAt, status: viewStatus(rec.o.state), styleName: rec.job.styleName, skills: rec.job.skills, ratio: rec.job.ratio,
+      id: rec.id, createdAt: rec.createdAt, engine: engineOf(rec.job.engine).id, status: viewStatus(rec.o.state), styleName: rec.job.styleName, skills: rec.job.skills, ratio: rec.job.ratio,
       templateTitle: rec.job.templateTitle, briefExcerpt: rec.briefExcerpt, runner: rec.runner, message: message(rec), hasPreview: rec.hasPreview,
       files: rec.files, layers: rec.layers, account: rec.account, orchestration: rec.o,
     };
@@ -304,6 +310,9 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     if (missing.length > 0) {
       return escalate(rec, `The skill ${missing.map((m) => `“${m}”`).join(' and ')} is not installed on this computer, so this can’t be drawn. Install it, then resume.`, 'STAGE_CORRECTING');
     }
+    const engine = engineOf(rec.job.engine);
+    const notReady = deps.engineReady?.(engine.id) ?? null;
+    if (notReady) return escalate(rec, `This job is drawn in ${engine.label}, which is not ready: ${notReady} Fix that, then resume.`, 'STAGE_CORRECTING');
 
     const run = rec.o.productionRuns + 1;
     const p = rec.paths;
@@ -320,15 +329,16 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     const style = ART_STYLES.find((s) => s.id === rec.job.styleId);
     await writeJson(path.join(p.production, 'job.json'), {
       artwork: rec.job.templateTitle, artStyle: { name: rec.job.styleName, description: style?.description ?? '' }, madeIn: rec.job.madeIn,
+      drawingApps: engine.apps,
       size: rec.job.canvas, text: rec.job.text, clientBrief: rec.job.brief, plan: rec.job.plan, styleContract: rec.o.styleContract,
       conceptDescription: lockedVersion.description ?? null, registry: rec.o.registry, corrections: rec.o.corrections, run,
       clientReference: referenceFile ? { file: referenceFile, role: rec.job.reference?.role ?? null } : null,
     });
     const files = { mcp: path.join(p.control, `mcp-run-${run}.json`), settings: path.join(p.control, `settings-run-${run}.json`) };
     const guardFile = path.join(p.control, 'guard.json');
-    await writeJson(files.mcp, productionMcpConfig(await deps.claudeJson(), p));
-    await writeJson(guardFile, guardConfig(p, jobsDir));
-    await writeJson(files.settings, productionSettings(p, { node: deps.nodeBin, configFile: guardFile }));
+    await writeJson(files.mcp, productionMcpConfig(await deps.claudeJson(), p, engine.id));
+    await writeJson(guardFile, guardConfig(p, jobsDir, engine.id));
+    await writeJson(files.settings, productionSettings(p, { node: deps.nodeBin, configFile: guardFile }, engine.id));
     const prompt = buildOrchestratedPrompt({ ...rec.job, reference: null }, p.production, { run, referenceFile });
     await fs.writeFile(path.join(p.control, `prompt-run-${run}.txt`), prompt);
     await save(rec);
@@ -345,7 +355,7 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     rec.o = { ...rec.o, registry };
     await save(rec);
     const items: VerifierItem[] = registry.flatMap((a) => STAGES.filter((s) => a.stages[s].status === 'verifying').map((s) => ({
-      asset: a.id, name: a.name, app: a.app, stage: s, claimed: a.stages[s].checkpoint ? 'passed' as const : 'not_applicable' as const,
+      asset: a.id, name: a.name, app: appFor(engine.id, a.app), stage: s, claimed: a.stages[s].checkpoint ? 'passed' as const : 'not_applicable' as const,
       reason: a.stages[s].reason, evidence: a.stages[s].evidence, checkpoint: a.stages[s].checkpoint?.file ?? null, defectsBefore: a.stages[s].defects,
     })));
     rec.abort = new AbortController();
@@ -421,12 +431,14 @@ export function createOrchestrator(deps: OrchestratorDeps) {
     await fs.mkdir(rec.paths.exports, { recursive: true });
     for (const f of cand.files) await fs.copyFile(path.join(rec.paths.output, f.name), path.join(rec.paths.exports, f.name));
     const lock = rec.o.concept.locked;
+    const apps = engineOf(rec.job.engine).apps;
     await writeJson(path.join(rec.paths.root, 'final_report.json'), {
       jobId: rec.id, approvedVersion: cand.version, approvedBy: approval.by, approvedAt: new Date(approval.at).toISOString(), files: cand.files,
       concept: lock ? { version: lock.version, sha256: lock.sha256, approvedBy: lock.by, approvedAt: new Date(lock.at).toISOString(), storage: 'concepts/reference_only (never reachable from production)' } : null,
       productionRuns: rec.o.productionRuns, assets: rec.o.registry.map((a) => ({ id: a.id, stages: Object.fromEntries(STAGES.map((s) => [s, a.stages[s].status])) })),
       skills: rec.job.skills, history: rec.o.history,
-      aiDisclosure: 'AI-assisted native-tool production: the concept was generated by an OpenAI image model as reference only; the artwork was built in Photoshop/Illustrator by a Claude agent with native operations, checked by an independent verifier and approved by the designer. Not exclusively human-made.',
+      drawingApps: apps,
+      aiDisclosure: `AI-assisted native-tool production: the concept was generated by an OpenAI image model as reference only; the artwork was built in ${apps.Photoshop}/${apps.Illustrator} by a Claude agent with native operations, checked by an independent verifier and approved by the designer. Not exclusively human-made.`,
     });
     rec.files = SOURCE_FILES.filter((f) => cand.files.some((c) => c.name === f));
     move(rec, 'DELIVERED', 'server', `Exported version ${cand.version.slice(0, 12)}`, cand.files.map((f) => `exports/${f.name}`));

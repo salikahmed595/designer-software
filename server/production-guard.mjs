@@ -8,15 +8,21 @@
  *  - any path into the job's concept folder (reference only), control, approvals, logs, plans, brief or exports folders,
  *    or into any other job; any string mentioning "reference_only";
  *  - writing, saving, opening or placing files outside the job's production folder;
- *  - shells, web access, sub-agents, Image Trace and every connector except Photoshop, Illustrator and design-assets.
+ *  - shells, web access, sub-agents, Image Trace (tool or engine command), app-window control and every connector except
+ *    this job's two drawing apps (Photoshop + Illustrator, or PhotoCraft + VectorCraft) and design-assets.
  * Unreadable input or config fails closed (refused). Plain JavaScript on purpose: it runs with node alone.
  */
 import { readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DENIED_TOOLS = new Set(['Bash', 'PowerShell', 'WebFetch', 'WebSearch', 'Agent', 'Task', 'NotebookEdit', 'mcp__illustrator__trace']);
-const CONNECTORS = ['mcp__photoshop__', 'mcp__illustrator__', 'mcp__design-assets__'];
+const DENIED_TOOLS = new Set(['Bash', 'PowerShell', 'WebFetch', 'WebSearch', 'Agent', 'Task', 'NotebookEdit']);
+/** Adobe jobs (and guard configs written before engines existed). */
+const ADOBE_CONNECTORS = ['mcp__photoshop__', 'mcp__illustrator__', 'mcp__design-assets__'];
+const ADOBE_DENIED = ['mcp__illustrator__trace'];
+/** Connector tools that run an engine command by id: the id is checked against the job's denied commands. */
+const COMMAND_TOOL = /__(command_run|run_command|command_batch)$/;
+const COMMAND_KEYS = new Set(['id', 'command']);
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit']);
 /** Input fields that hold file or folder paths. */
 const PATH_KEYS = new Set(['path', 'file_path', 'filePath', 'file', 'files', 'paths', 'dest', 'dest_dir', 'destDir', 'folder', 'dir', 'directory', 'out', 'output', 'save_path', 'target', 'source', 'src']);
@@ -67,11 +73,18 @@ function collect(value, keyName, out, depth = 0) {
 export function decide(input, config) {
   if (!input || typeof input !== 'object' || !config || !Array.isArray(config.allowedRoots)) return deny('The production guard could not read this tool call, so it was refused.');
   const tool = String(input.tool_name ?? '');
-  if (DENIED_TOOLS.has(tool)) return deny(`${tool} is not allowed in production. Draw with the Photoshop and Illustrator tools only.`);
-  if (tool.startsWith('mcp__') && !CONNECTORS.some((c) => tool.startsWith(c))) return deny(`The connector tool ${tool} is not allowed in production.`);
+  const connectors = Array.isArray(config.connectors) ? config.connectors : ADOBE_CONNECTORS;
+  const deniedTools = Array.isArray(config.deniedTools) ? config.deniedTools : ADOBE_DENIED;
+  if (DENIED_TOOLS.has(tool) || deniedTools.includes(tool)) return deny(`${tool} is not allowed in production. Draw with this job's drawing apps only.`);
+  if (tool.startsWith('mcp__') && !connectors.some((c) => tool.startsWith(c))) return deny(`The connector tool ${tool} is not allowed in production (this job uses other drawing apps).`);
   const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : config.production;
   const strings = [];
   collect(input.tool_input ?? {}, '', strings);
+  if (COMMAND_TOOL.test(tool) && Array.isArray(config.deniedCommands) && config.deniedCommands.length > 0) {
+    const banned = config.deniedCommands.map((re) => new RegExp(re, 'i'));
+    const hit = strings.find(({ key: k, value }) => COMMAND_KEYS.has(k) && banned.some((re) => re.test(value)));
+    if (hit) return deny(`The command ${hit.value} is not allowed in production (no Image Trace: build every shape yourself).`);
+  }
   const writes = WRITE_TOOLS.has(tool) || tool.startsWith('mcp__');
   for (const { key: k, value } of strings) {
     if (/reference[_-]?only/i.test(value)) return deny('The concept is reference only. It can never be opened, placed, read or copied in production.');

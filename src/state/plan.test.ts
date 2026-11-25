@@ -104,6 +104,14 @@ describe('buildPlanPrompt', () => {
     expect(buildPlanPrompt(job({ madeIn: 'Illustrator + Photoshop' }), 'C:/p')).toMatch(/"Illustrator" for vector parts .* "Photoshop" for painting/);
   });
 
+  it('names the drawing apps the designer picked (Adobe by default), keeping the plan’s app roles', () => {
+    expect(prompt).toContain('Adobe Photoshop and Illustrator');
+    const craft = buildPlanPrompt(job({ engine: 'craft', madeIn: 'Illustrator + Photoshop' }), 'C:/p');
+    expect(craft).toMatch(/PhotoCraft and VectorCraft/);
+    expect(craft).toMatch(/"Illustrator" means VectorCraft.*"Photoshop" means PhotoCraft/);
+    expect(craft).not.toMatch(/Adobe/);
+  });
+
   it('mentions the reference image file only when there is one', () => {
     expect(prompt).not.toMatch(/reference\./);
     expect(buildPlanPrompt(job({ reference: { mime: 'image/png', ext: 'png', base64: 'x', role: 'Style reference' } }), 'C:/p')).toContain('C:/p/reference.png');

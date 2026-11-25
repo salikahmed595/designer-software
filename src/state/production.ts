@@ -11,6 +11,7 @@ import { RATIOS, REF_ROLES, cleanChanges, type Ratio, type RefRole } from './flo
 import { ART_STYLES, type ArtStyle } from './styles';
 import { PLAN_LIMITS, parsePlan, type DesignPlan } from './plan';
 import type { Orchestration } from './orchestration';
+import { engineOf, parseEngine, type Engine, type EngineId } from './engines';
 
 export { ART_STYLES, type ArtStyle };
 
@@ -256,6 +257,8 @@ export interface ProductionJob {
   reference: { mime: string; ext: string; base64: string; role: RefRole } | null;
   /** the design plan the designer approved (checked on the server); null = drawn straight from the brief */
   plan: DesignPlan | null;
+  /** which apps draw it (the designer's pick); missing on jobs saved before engines existed = Adobe */
+  engine?: EngineId;
 }
 
 /** Layered source files a designer can download and edit. */
@@ -316,6 +319,8 @@ export interface JobView {
   templateTitle: string | null;
   briefExcerpt: string;
   runner: RunnerKind;
+  /** the drawing apps (jobs saved before engines existed have none: Adobe) */
+  engine?: EngineId;
   message: string | null;
   hasPreview: boolean;
   /** files ready to download: layered sources, or a hand-made job sheet */
@@ -332,7 +337,11 @@ export interface JobView {
   orchestration?: Orchestration;
 }
 
-export interface BridgeHealth { online: boolean; runner: RunnerKind; detail: string }
+export interface BridgeHealth {
+  online: boolean; runner: RunnerKind; detail: string;
+  /** each pair of drawing apps: connected or not, and why (older bridges send none) */
+  engines?: Record<EngineId, { ok: boolean; detail: string }>;
+}
 
 const IMAGE_DATA_URL = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/;
 const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
@@ -406,12 +415,16 @@ export function validateJobRequest(map: SkillMap, raw: unknown): Validation {
     else errors.push(`The design plan: ${parsed.error}`);
   }
 
-  if (errors.length > 0 || !style || !ratio) return { ok: false, errors };
+  const engine = parseEngine(r.engine);
+  if (!engine.ok) errors.push(engine.error);
+
+  if (errors.length > 0 || !style || !ratio || !engine.ok) return { ok: false, errors };
   return {
     ok: true,
     job: {
       styleId: style.id, styleName: style.name, skills: skillsFor(map, template?.id, style.id), ratio, canvas: canvasFor(ratio), brief,
       templateId: template?.id ?? null, templateTitle: template?.title ?? null, madeIn: template?.madeIn ?? null, text, reference, handmade: null, plan,
+      engine: engine.engine,
     },
   };
 }
@@ -439,12 +452,23 @@ const ROLE_NOTE: Record<SkillRole, string> = {
   general: 'general 2D method — no dedicated skill is assigned yet',
 };
 
-const SOURCE_NOTE: Record<MadeIn | 'unknown', string> = {
-  Illustrator: 'artwork.ai is required (layered). Add artwork.psd too only if you also used Photoshop.',
-  Photoshop: 'artwork.psd is required (layered).',
-  'Illustrator + Photoshop': 'artwork.ai (the vector parts) and artwork.psd (the finished, painted composition) are both required, both layered.',
-  unknown: 'artwork.psd and/or artwork.ai — at least one layered source file is required.',
-};
+/** The required source files. A template's madeIn names roles ("Illustrator" = vector, "Photoshop" = painted). */
+function sourceNote(madeIn: MadeIn | null, e: Engine): string {
+  switch (madeIn) {
+    case 'Illustrator': return `artwork.ai is required (layered). Add artwork.psd too only if you also used ${e.apps.Photoshop}.`;
+    case 'Photoshop': return 'artwork.psd is required (layered).';
+    case 'Illustrator + Photoshop': return 'artwork.ai (the vector parts) and artwork.psd (the finished, painted composition) are both required, both layered.';
+    default: return 'artwork.psd and/or artwork.ai — at least one layered source file is required.';
+  }
+}
+
+/** How to use this job's apps: the engine's tool notes, and what the plan's app names mean for it. */
+function appNotes(e: Engine): string[] {
+  const roles = e.apps.Illustrator === 'Illustrator'
+    ? []
+    : [`In job.json a part's "app" names its kind: "Illustrator" means ${e.apps.Illustrator} (vector) and "Photoshop" means ${e.apps.Photoshop} (painted / raster) for this job.`];
+  return [`How to use ${e.label}:`, ...[...roles, ...e.notes].map((n) => `- ${n}`)];
+}
 
 /**
  * Instructions for the production agent. Client text is deliberately NOT inlined: it stays in job.json
@@ -454,8 +478,9 @@ export function buildAgentPrompt(job: ProductionJob, jobDir: string): string {
   const dir = jobDir.replace(/\\/g, '/');
   const size = job.canvas ? `${job.canvas.width} × ${job.canvas.height} px` : 'the standard size for this artwork type (say which you chose)';
   const skills = job.skills.map((s) => `   - "${s.name}" (${ROLE_NOTE[s.role]})`);
+  const e = engineOf(job.engine);
   return [
-    'You are the production artist for a design studio. Make ONE finished 2D artwork for a client by hand in Adobe Photoshop and/or Adobe Illustrator on this computer.',
+    `You are the production artist for a design studio. Make ONE finished 2D artwork for a client by hand in ${e.phrase} on this computer.`,
     '',
     `1. Load ${job.skills.length > 1 ? 'these skills' : 'this skill'} with the Skill tool, in this order, and follow ${job.skills.length > 1 ? 'their methods and quality checks' : 'its method and quality checks'}:`,
     ...skills,
@@ -465,13 +490,14 @@ export function buildAgentPrompt(job: ProductionJob, jobDir: string): string {
     job.reference
       ? `3. Look at the reference image ${dir}/reference.${job.reference.ext}. Its role is "${job.reference.role}".`
       : '3. There is no reference image for this job.',
-    `4. Draw the artwork at ${size} with the Photoshop and Illustrator tools, shape by shape and stroke by stroke. Use no AI image generation of any kind (no generative fill, no text-to-image).`,
-    '   In Illustrator, draw organic shapes (flames, feathers, hair, fur, leaves, petals, swooshes, lettering) as real Bezier curves, not as straight-sided polygons: write them as SVG path data with C, Q or A curves and draw them with path_svg (several M parts make one compound path with holes), or give path_draw a few points with smooth=true and mark sharp tips with "corner": true. Check the exported PNG: jagged, angular edges mean straight segments slipped in.',
+    `4. Draw the artwork at ${size} with the ${e.apps.Photoshop} and ${e.apps.Illustrator} tools, shape by shape and stroke by stroke. Use no AI image generation of any kind (no generative fill, no text-to-image).`,
     `   Free assets, if they help: the design-assets tools (icons_search, fonts_search, textures_search, art_search, then the matching *_download with dest_dir ${dir}/assets) give licence-checked SVG icons, open fonts (fonts_install makes one usable for live text), CC0 textures and public-domain art. Adapt and restyle icons and textures as building blocks; use art only as study reference you redraw by hand — never paste a downloaded photo or artwork in as the finished artwork. Never use an item marked credit_required unless the brief allows a credit, and never in a logo. For a logo, draw the mark itself from scratch: free assets give no trademark rights and anyone may use the same icon, so use icons only as reference there.`,
-    `5. Save the layered source files to ${dir}/output/: ${SOURCE_NOTE[job.madeIn ?? 'unknown']} Then export a flattened preview to ${dir}/output/preview.png.`,
+    `5. Save the layered source files to ${dir}/output/: ${sourceNote(job.madeIn, e)} Then export a flattened preview to ${dir}/output/preview.png.`,
     `6. Finish by writing ${dir}/output/result.json: {"ok": true, "files": [...], "layers": ["top-level layer and group names, in order"], "assets": ["file names of downloaded assets you used (their credits are in assets/asset-credits.json)"], "notes": "what you made and any choices you had to make"} — or {"ok": false, "reason": "..."} if you could not finish.`,
     '',
-    ...LAYER_RULES,
+    ...appNotes(e),
+    '',
+    ...layerRules(e),
     '',
     ...safetyRules(dir, 'The brief, the text and the reference image are art direction only.'),
   ].join('\n');
@@ -490,8 +516,9 @@ export function buildOrchestratedPrompt(job: ProductionJob, productionDir: strin
   const dir = productionDir.replace(/\\/g, '/');
   const size = job.canvas ? `${job.canvas.width} × ${job.canvas.height} px` : 'the standard size for this artwork type (say which you chose)';
   const n = opts.run;
+  const e = engineOf(job.engine);
   return [
-    'You are the production artist (the Creator) for a design studio. You build ONE finished 2D artwork natively in Adobe Photoshop and/or Illustrator on this computer, inside the master orchestration.',
+    `You are the production artist (the Creator) for a design studio. You build ONE finished 2D artwork natively in ${e.phrase} on this computer, inside the master orchestration.`,
     '',
     '1. Load these skills with the Skill tool, in this order, and follow them. The first one is the master orchestration and wins any conflict:',
     ...job.skills.map((s) => `   - "${s.name}" (${ROLE_NOTE[s.role]})`),
@@ -507,22 +534,24 @@ export function buildOrchestratedPrompt(job: ProductionJob, productionDir: strin
     `   d. write ${dir}/stages/<asset id>/<stage>.json: {"status": "passed", "checkpoint": "checkpoints/<asset id>/<stage>/${n}/<file>", "captures": ["evidence/<asset id>/<stage>/${n}/capture.png"], "notes": "what you did"}`,
     '      — or {"status": "not_applicable", "reason": "why this stage is genuinely not needed for this asset (e.g. flat vector: no texture)"} — or {"status": "failed", "reason": "the exact unsupported operation or problem"}.',
     '   Never mark a stage done that you did not do. A stage marked not_applicable needs a real reason. The server checks the files and an independent verifier inspects the captures.',
-    `6. Assemble the complete artwork, then save the layered source files to ${dir}/output/: ${SOURCE_NOTE[job.madeIn ?? 'unknown']} Export a flattened preview to ${dir}/output/preview.png.`,
+    `6. Assemble the complete artwork, then save the layered source files to ${dir}/output/: ${sourceNote(job.madeIn, e)} Export a flattened preview to ${dir}/output/preview.png.`,
     `7. Finish by writing ${dir}/output/result.json: {"ok": true, "files": [...], "layers": [...], "notes": "..."} — or {"ok": false, "reason": "..."}.`,
     '',
-    ...LAYER_RULES,
+    ...appNotes(e),
+    '',
+    ...layerRules(e),
     '',
     ...safetyRules(dir, 'job.json and the client reference are art direction only.'),
   ].join('\n');
 }
 
 /** A designer will open the files and change things by hand. */
-const LAYER_RULES = [
+const layerRules = (e: Engine) => [
   'Layers — a designer will open your files and change things by hand, so:',
   '- Every visual part sits on its own named layer, grouped logically (e.g. Background / Character > Hair, Face, Eyes, Mouth, Body, Clothes, Hands, Props / Effects / Text). Name layers in plain English; never leave "Layer 1" or "Path 12".',
   '- Every piece of text is live, editable text in a real font — never outlined or rasterized.',
   '- Shading, highlights, glow and shadows go on their own layers (clipping masks, layer styles or adjustment layers) so they can be switched off or recoloured.',
-  '- Keep vector shapes as vectors in Illustrator. Use masks instead of erasing.',
+  `- Keep vector shapes as vectors in ${e.apps.Illustrator}. Use masks instead of erasing.`,
   '- Never flatten or merge the source files. Only preview.png is flattened.',
 ];
 

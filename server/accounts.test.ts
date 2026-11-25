@@ -64,6 +64,11 @@ describe('mcpServersFor / bareSkillNote', () => {
     expect(mcpServersFor('{bad')).toEqual({ mcpServers: {} });
   });
 
+  it('keeps only the PhotoCraft and VectorCraft connectors (and design-assets) for a Craft job', () => {
+    const text = JSON.stringify({ mcpServers: { photoshop: { command: 'ps.exe' }, photocraft: { command: 'pc.exe' }, vectorcraft: { command: 'vc.exe' }, 'design-assets': { command: 'node' } } });
+    expect(Object.keys(mcpServersFor(text, ['photocraft', 'vectorcraft']).mcpServers)).toEqual(['photocraft', 'vectorcraft', 'design-assets']);
+  });
+
   it('tells a bare-mode agent where each skill file is', () => {
     expect(bareSkillNote([{ name: 'a-skill', file: 'C:\\s\\a-skill\\SKILL.md' }])).toMatch(/a-skill.*C:\\s\\a-skill\\SKILL\.md/);
     expect(bareSkillNote([])).toBe('');

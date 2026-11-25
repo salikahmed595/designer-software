@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { NO_OPENAI_KEY, openAiKeyStatus, realDeps, verifierPrompt } from './agents';
+import { NO_OPENAI_KEY, creatorArgs, openAiKeyStatus, realDeps, verifierPrompt } from './agents';
 import { jobPaths } from './gate';
 import type { VerifierRun } from './orchestrator';
 
@@ -52,5 +52,28 @@ describe('the real concept generator', () => {
     const status = await openAiKeyStatus({ LUMORA_OPENAI_KEY_FILE: file }, path.join(tmp, 'app'));
     expect(status).toBe('OpenAI concept key found (file key.txt).');
     expect(status).not.toContain('sk-');
+  });
+});
+
+describe('the drawing agent’s command line follows the job’s apps', () => {
+  const files = { mcp: 'm.json', settings: 's.json' };
+  const acct = { label: 'Claude account 1', kind: 'login' as const, secret: null };
+  const tools = (args: string[]) => args[args.indexOf('--allowedTools') + 1];
+  const denied = (args: string[]) => args[args.indexOf('--disallowedTools') + 1];
+
+  it('gives an Adobe job (and a job saved before engines) only the Adobe connectors', () => {
+    for (const job of [{}, { engine: 'adobe' }]) {
+      const a = creatorArgs(acct, { files, job } as never);
+      expect(tools(a)).toMatch(/mcp__photoshop/);
+      expect(tools(a)).not.toMatch(/photocraft|vectorcraft/);
+    }
+  });
+
+  it('gives a PhotoCraft + VectorCraft job only the Craft connectors, with the app-window tools denied', () => {
+    const a = creatorArgs(acct, { files, job: { engine: 'craft' } } as never);
+    expect(tools(a)).toMatch(/mcp__photocraft.*mcp__vectorcraft/);
+    expect(tools(a)).not.toMatch(/mcp__photoshop|mcp__illustrator/);
+    expect(denied(a)).toMatch(/mcp__vectorcraft__screenshot/);
+    expect(a).toContain('--strict-mcp-config');
   });
 });

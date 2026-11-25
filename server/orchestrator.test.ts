@@ -168,6 +168,43 @@ describe('production gate', () => {
     expect(data).not.toMatch(/reference_only|concept-v1/);
   });
 
+  it('a PhotoCraft + VectorCraft job gets only the Craft connectors, rooted in production, and the Craft guard', async () => {
+    const craftJson = JSON.stringify({
+      mcpServers: {
+        ...JSON.parse(CLAUDE_JSON).mcpServers,
+        photocraft: { command: 'pc.exe', args: ['mcp', '--automation-read-root', 'C:\\W', '--automation-write-root', 'C:\\W'] },
+        vectorcraft: { command: 'vc.exe', args: ['mcp', '--automation-read-root', 'C:\\W', '--automation-write-root', 'C:\\W'] },
+      },
+    });
+    const s = setup({ claudeJson: async () => craftJson });
+    const id = await toConceptReview(s, { ...JOB, engine: 'craft' });
+    await s.orch.approveConcept(id, 1);
+    await s.orch.idle();
+    const run = s.creatorRuns[0];
+    expect(run.job.engine).toBe('craft');
+    const mcp = await readJson(run.files.mcp);
+    expect(Object.keys(mcp.mcpServers).sort()).toEqual(['photocraft', 'vectorcraft']);
+    expect(mcp.mcpServers.vectorcraft.args).toEqual(['mcp', '--automation-read-root', run.paths.production, '--automation-write-root', run.paths.production]);
+    const guard = await readJson(path.join(run.paths.control, 'guard.json'));
+    expect(guard.connectors).toEqual(['mcp__photocraft__', 'mcp__vectorcraft__', 'mcp__design-assets__']);
+    expect(guard.deniedCommands.length).toBeGreaterThan(0);
+    expect(run.prompt).toContain('PhotoCraft and/or VectorCraft');
+    const data = JSON.parse(await fs.readFile(path.join(run.paths.production, 'job.json'), 'utf8'));
+    expect(data.drawingApps).toEqual({ Photoshop: 'PhotoCraft', Illustrator: 'VectorCraft' });
+    // the verifier is told which app each asset was drawn in
+    expect(s.verifierRuns[0].items.map((i) => i.app)).toEqual(expect.arrayContaining(['PhotoCraft', 'VectorCraft']));
+  });
+
+  it('asks a human instead of drawing when the job’s apps are not connected', async () => {
+    const s = setup({ engineReady: (e) => (e === 'craft' ? 'PhotoCraft could not be started: its program is not where it was registered.' : null) });
+    const id = await toConceptReview(s, { ...JOB, engine: 'craft' });
+    await s.orch.approveConcept(id, 1);
+    await s.orch.idle();
+    expect(s.creatorRuns).toHaveLength(0);
+    expect(state(s.orch, id)).toBe('HUMAN_INTERVENTION_REQUIRED');
+    expect(s.orch.get(id)!.message).toMatch(/PhotoCraft could not be started/);
+  });
+
   it('refuses production when a needed skill is missing', async () => {
     const s = setup({ missingSkills: async (names) => names.filter((n) => n === '2d-pfp') });
     const id = await toConceptReview(s);

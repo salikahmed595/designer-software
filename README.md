@@ -110,6 +110,12 @@ $env:LUMORA_CLAUDE_BIN = "C:\path\to\claude.exe"; npm run dev
 
 The agent only uses **Photoshop 2023 and Illustrator 2022** (never another version). At startup the bridge checks both are installed and registers the `photoshop` / `illustrator` MCP servers with Claude Code if they are missing; if either app is missing, the Jobs screen says what to install.
 
+#### Drawing apps per job: Adobe or PhotoCraft + VectorCraft
+
+On the brief screen the designer picks **Draw with**: Photoshop + Illustrator (Adobe, the default) or PhotoCraft + VectorCraft. Everything else is the same: concept, approvals, seven stages, verification and the layered `artwork.psd` + `artwork.ai`. The job's agent gets only the chosen pair's connectors, rooted in that job's `production/` folder, with the window-driving tools (screenshots, pointer, keys, menus) and VectorCraft Image Trace refused. In a plan, "Illustrator" means the vector app and "Photoshop" the painting app, so with the Craft pair they mean VectorCraft and PhotoCraft.
+
+PhotoCraft and VectorCraft must be registered with Claude Code as MCP servers named `photocraft` and `vectorcraft` (their installers do this). At startup the bridge runs each one's `--version`; the Jobs screen says which pair is connected and why one isn't. The agent runs when at least one pair is ready. A pair that isn't ready can't be picked, and a job sent for it is refused with the reason.
+
 #### Backup Claude accounts (when one runs out)
 
 A job runs on this computer's Claude login first. If that account is out of usage (or can't sign in), the same job moves on to the next account. A drawing failure is never retried on another account. Set backups as **Windows user environment variables**, never in a file in this repo, then close the terminal and start the app from a new one:
@@ -123,7 +129,7 @@ A job runs on this computer's Claude login first. If that account is out of usag
    [Environment]::SetEnvironmentVariable('LUMORA_ANTHROPIC_API_KEY', (Read-Host 'Paste the API key'), 'User')
    ```
 
-The Jobs screen then shows the order, e.g. "this computer's Claude login → backup Claude account 2 → Anthropic API key", and each job card says which account it ran on. Each agent run gets only its own account's credential; the token and key never go into job files, prompts or logs. API-key runs use the CLI's `--bare` mode, the only mode in which it uses a key while a subscription login exists; the Adobe connectors are passed to it explicitly.
+The Jobs screen then shows the order, e.g. "this computer's Claude login → backup Claude account 2 → Anthropic API key", and each job card says which account it ran on. Each agent run gets only its own account's credential; the token and key never go into job files, prompts or logs. API-key runs use the CLI's `--bare` mode, the only mode in which it uses a key while a subscription login exists; the job's drawing-app connectors are passed to it explicitly.
 
 Other switches: `LUMORA_RUNNER=mock` (placeholder result — used by the tests), `LUMORA_RUNNER=off` (save jobs only), `LUMORA_JOBS_DIR` (where job folders go; it must be inside the Adobe tool servers' allowed folders).
 
@@ -145,7 +151,9 @@ The tests use the demo runner. It writes placeholder concepts, stage checkpoints
 - a live OpenAI Images call (the request and its errors are tested with a fake `fetch`; the model name `gpt-image-2.6-sunburst` is not confirmed against the live API);
 - live Claude creator and verifier runs under the orchestration (arguments, prompts and the reply parser are tested; the runs themselves are not);
 - the `--settings` deny rules and the PreToolUse guard hook inside a real Claude Code run (the guard's decisions are unit-tested; Claude Code skips hooks in `--bare` mode, so API-key runs rely on the other layers);
-- real drawing quality in Photoshop 2023 / Illustrator 2022 through all seven stages. Only the connectors' refusal of the concept path was run against the real apps.
+- real drawing quality in Photoshop 2023 / Illustrator 2022, or in PhotoCraft / VectorCraft, through all seven stages. Only the connectors' refusal of the concept path was run against the real Adobe apps.
+
+Run live on 2026-11-25 (not in the automated tests): the startup check found both pairs connected (PhotoCraft 0.23.1, VectorCraft 0.24.1); a real Claude plan and a real OpenAI concept were made for a PhotoCraft + VectorCraft job, which stopped at concept review as it should.
 
 ## Where things are
 

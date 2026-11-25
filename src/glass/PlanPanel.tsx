@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { MadeIn } from '../state/catalog';
 import { PLAN_APPS, PLAN_LIMITS, type DesignPlan, type PlanApp } from '../state/plan';
 import { IconClose, IconPlus } from '../components/icons';
+import { DEFAULT_ENGINE, appFor, type EngineId } from '../state/engines';
 
 const VALID_HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 const swatch = (hex: string) => {
@@ -14,6 +15,8 @@ const appsFor = (madeIn: MadeIn | undefined): readonly PlanApp[] =>
 interface Props {
   plan: DesignPlan;
   madeIn: MadeIn | undefined;
+  /** the drawing apps of this job: a part's role is shown as the app that draws it */
+  engine?: EngineId;
   outdated: boolean;
   busy: boolean;
   onChange: (plan: DesignPlan) => void;
@@ -22,7 +25,7 @@ interface Props {
 }
 
 /** Claude's design plan, fully editable: the designer checks it, fixes anything, then approves it. */
-export function PlanPanel({ plan, madeIn, outdated, busy, onChange, onRedo }: Props) {
+export function PlanPanel({ plan, madeIn, engine = DEFAULT_ENGINE, outdated, busy, onChange, onRedo }: Props) {
   const id = useId();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const [note, setNote] = useState('');
@@ -78,7 +81,7 @@ export function PlanPanel({ plan, madeIn, outdated, busy, onChange, onRedo }: Pr
           <li key={i} className="plan-row plan-part">
             <input className="field" aria-label={`Part ${i + 1} name`} maxLength={PLAN_LIMITS.short} value={p.name} onChange={(e) => setPart(i, { name: e.target.value })} />
             <select className="field" aria-label={`Part ${i + 1} app`} value={p.app} onChange={(e) => setPart(i, { app: e.target.value as PlanApp })}>
-              {[...new Set([...apps, p.app])].map((a) => <option key={a} value={a}>{a}</option>)}
+              {[...new Set([...apps, p.app])].map((a) => <option key={a} value={a}>{appFor(engine, a)}</option>)}
             </select>
             <input className="field" aria-label={`Part ${i + 1} detail`} maxLength={PLAN_LIMITS.short * 2} value={p.detail} onChange={(e) => setPart(i, { detail: e.target.value })} />
             <button type="button" className="btn btn-sm plan-remove" aria-label={`Remove part ${i + 1}`} onClick={() => set('parts', plan.parts.filter((_, k) => k !== i))}><IconClose width={14} height={14} /></button>
