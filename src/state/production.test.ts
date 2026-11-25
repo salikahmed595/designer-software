@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import shipped from '../../production/skills.json';
 import { TEMPLATES } from './catalog';
 import {
+  validatePlanRequest,
   ART_STYLES, ART_STYLE_TABS, BUILT_IN_DEFAULT_SKILL, SKILL_NAME, applySkillChange, buildAgentPrompt, canvasFor, filterArtStyles, getArtStyle,
   judgeResult, normalizeSkillMap, parseSkillFile, productionIssues, referencedSkills, skillSlots, skillStatus, skillsFor, validateJobRequest,
   HAND_MADE_SKILL, handmadeJobSheet,
@@ -431,5 +432,53 @@ describe('handing in the hand-drawn artwork (a designer uploads the finished PSD
   it('refuses empty and oversized uploads on the server too', () => {
     expect(judgeHandIn({ kind: 'ai', size: 0, head: new Uint8Array(), psdLayers: null })).toEqual({ ok: false, error: 'That file is empty.' });
     expect(judgeHandIn({ kind: 'psd', size: MAX_HAND_IN_BYTES + 1, head: psdHead(1), psdLayers: 9 })).toEqual({ ok: false, error: expect.stringMatching(/larger than 1 GB/) });
+  });
+});
+
+describe('asking Claude for a design plan', () => {
+  it('checks the request like a job, and adds the designer’s note and the plan to revise', () => {
+    const previous = { understood: 'u', concept: 'c', palette: [{ name: 'a', hex: '#000000' }, { name: 'b', hex: '#FFFFFF' }], parts: [{ name: 'P', app: 'Photoshop' }] };
+    const r = validatePlanRequest(MAP, { ...good, note: '  Warmer colours please  ', previous });
+    expect(r.ok && r.note).toBe('Warmer colours please');
+    expect(r.ok && r.previous?.parts).toEqual([{ name: 'P', app: 'Photoshop', detail: '' }]);
+    expect(r.ok && r.job.brief).toBe(good.brief);
+  });
+
+  it('has no note or previous plan when none is sent, and refuses bad requests', () => {
+    const r = validatePlanRequest(MAP, good);
+    expect(r.ok && [r.note, r.previous]).toEqual([null, null]);
+    expect(validatePlanRequest(MAP, { ...good, brief: '' }).ok).toBe(false);
+    expect(validatePlanRequest(MAP, { templateId: 'handmade-logo', reference: { dataUrl: PNG } })).toEqual({ ok: false, errors: ['Hand-made jobs are drawn from the client’s original, so they have no design plan.'] });
+  });
+});
+
+describe('the approved design plan travels with the job', () => {
+  const plan = {
+    understood: 'A wolf gamer portrait.', concept: 'Neon wolf with a headset.', composition: 'Head and shoulders, centred.',
+    palette: [{ name: 'Night', hex: '#101020' }, { name: 'Neon', hex: '#00FFCC' }], typography: 'Orbitron for the name.',
+    parts: [{ name: 'Background', app: 'Photoshop', detail: 'Dark gradient' }, { name: 'Wolf > Head', app: 'Illustrator', detail: 'Clean shapes' }],
+    assets: [], assumptions: [], styleNote: null,
+  };
+
+  it('keeps a valid plan (checked and trimmed on the server)', () => {
+    const r = validateJobRequest(MAP, { ...good, plan: { ...plan, concept: '  Neon wolf with a headset.  ' } });
+    expect(r.ok && r.job.plan?.concept).toBe('Neon wolf with a headset.');
+  });
+
+  it('has no plan when none is sent, and refuses a broken one', () => {
+    const none = validateJobRequest(MAP, good);
+    expect(none.ok && none.job.plan).toBe(null);
+    const bad = validateJobRequest(MAP, { ...good, plan: { ...plan, parts: [] } });
+    expect(bad).toEqual({ ok: false, errors: ['The design plan: The plan must list the parts to draw.'] });
+  });
+
+  it('tells the drawing agent to follow the plan in job.json, without pasting it into the instructions', () => {
+    const r = validateJobRequest(MAP, { ...good, plan });
+    if (!r.ok) throw new Error(r.errors.join(' '));
+    const prompt = buildAgentPrompt(r.job, 'D:/jobs/abc123');
+    expect(prompt).toMatch(/design plan the designer approved \("plan"\)/);
+    expect(prompt).not.toContain('Neon wolf');
+    const r2 = validateJobRequest(MAP, good);
+    expect(r2.ok && buildAgentPrompt(r2.job, 'D:/jobs/abc123')).not.toMatch(/approved/);
   });
 });

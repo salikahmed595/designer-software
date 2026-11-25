@@ -9,6 +9,7 @@
 import { TEMPLATES, getTemplate, isHandmade, type MadeIn } from './catalog';
 import { RATIOS, REF_ROLES, cleanChanges, type Ratio, type RefRole } from './flow';
 import { ART_STYLES, type ArtStyle } from './styles';
+import { PLAN_LIMITS, parsePlan, type DesignPlan } from './plan';
 
 export { ART_STYLES, type ArtStyle };
 
@@ -243,6 +244,8 @@ export interface ProductionJob {
   madeIn: MadeIn | null;
   text: string;
   reference: { mime: string; ext: string; base64: string; role: RefRole } | null;
+  /** the design plan the designer approved (checked on the server); null = drawn straight from the brief */
+  plan: DesignPlan | null;
 }
 
 /** Layered source files a designer can download and edit. */
@@ -358,6 +361,7 @@ function validateHandmade(r: Record<string, unknown>, templateId: string): Valid
       skills: [{ name: HAND_MADE_SKILL, role: 'artwork' }],
       templateId: template.id, templateTitle: template.title, madeIn: template.madeIn, text: '', reference,
       handmade: { mode, add: cleanChanges(changes.add), remove: cleanChanges(changes.remove) },
+      plan: null,
     },
   };
 }
@@ -383,14 +387,37 @@ export function validateJobRequest(map: SkillMap, raw: unknown): Validation {
 
   const reference = r.reference !== null && r.reference !== undefined ? parseReference(r.reference, errors) : null;
 
+  let plan: DesignPlan | null = null;
+  if (r.plan !== null && r.plan !== undefined) {
+    const parsed = parsePlan(r.plan);
+    if (parsed.ok) plan = parsed.plan;
+    else errors.push(`The design plan: ${parsed.error}`);
+  }
+
   if (errors.length > 0 || !style || !ratio) return { ok: false, errors };
   return {
     ok: true,
     job: {
       styleId: style.id, styleName: style.name, skills: skillsFor(map, template?.id, style.id), ratio, canvas: canvasFor(ratio), brief,
-      templateId: template?.id ?? null, templateTitle: template?.title ?? null, madeIn: template?.madeIn ?? null, text, reference, handmade: null,
+      templateId: template?.id ?? null, templateTitle: template?.title ?? null, madeIn: template?.madeIn ?? null, text, reference, handmade: null, plan,
     },
   };
+}
+
+/** A request for a design plan: checked exactly like a job, plus the designer's note and the plan being revised. */
+export function validatePlanRequest(map: SkillMap, raw: unknown):
+  | { ok: true; job: ProductionJob; note: string | null; previous: DesignPlan | null }
+  | { ok: false; errors: string[] } {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  if (typeof r.templateId === 'string' && isHandmade(r.templateId)) {
+    return { ok: false, errors: ['Hand-made jobs are drawn from the client’s original, so they have no design plan.'] };
+  }
+  const { plan: _ignored, note: rawNote, previous: rawPrevious, ...rest } = r;
+  const checked = validateJobRequest(map, rest);
+  if (!checked.ok) return checked;
+  const note = typeof rawNote === 'string' && rawNote.trim() ? rawNote.trim().slice(0, PLAN_LIMITS.note) : null;
+  const prev = rawPrevious ? parsePlan(rawPrevious) : null;
+  return { ok: true, job: checked.job, note, previous: prev?.ok ? prev.plan : null };
 }
 
 const ROLE_NOTE: Record<SkillRole, string> = {
@@ -421,6 +448,7 @@ export function buildAgentPrompt(job: ProductionJob, jobDir: string): string {
     ...skills,
     ...(job.skills.length > 1 ? ['   If they disagree: the art style skill decides how it looks; the artwork type skill decides layout, sizes, parts and deliverables.'] : []),
     `2. Read the job file ${dir}/job.json. It holds the artwork type, art style, text to include and the client's brief.`,
+    ...(job.plan ? ['   It also holds the design plan the designer approved ("plan"): follow it — what the client wants, the concept, composition, palette, typography, and each part drawn in the app it names. The skills decide how to draw; the plan decides what is drawn. If part of the plan cannot be done, say so in the notes.'] : []),
     job.reference
       ? `3. Look at the reference image ${dir}/reference.${job.reference.ext}. Its role is "${job.reference.role}".`
       : '3. There is no reference image for this job.',

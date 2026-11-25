@@ -60,7 +60,7 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await thumbsHaveSize(page, '.style-card [data-thumb]', 60);
   await noOverflow(page);
 
-  await page.getByRole('button', { name: /send to production/i }).click();
+  await page.getByRole('button', { name: /plan with claude/i }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Choose an art style.' })).toBeVisible();
   await expect(page.getByRole('alert').filter({ hasText: 'Write the client brief.' })).toBeVisible();
 
@@ -70,7 +70,7 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await page.getByLabel(/mascot name/i).fill('Blaze');
   await page.locator('input[type=file]').setInputFiles({ name: 'client-ref.png', mimeType: 'image/png', buffer: PNG });
   await expect(page.getByText('client-ref.png')).toBeVisible();
-  await page.getByRole('button', { name: /send to production/i }).click();
+  await page.getByRole('button', { name: /plan with claude/i }).click();
   await expect(page.getByRole('alert').filter({ hasText: /reference image should be used/i }).first()).toBeVisible();
   await page.getByRole('radio', { name: 'Character reference' }).click();
   await page.getByRole('radiogroup', { name: 'Size' }).getByRole('radio', { name: 'Portrait', exact: true }).click();
@@ -84,7 +84,15 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await page.locator('input[type=file]').setInputFiles({ name: 'client-ref.png', mimeType: 'image/png', buffer: PNG });
   await page.getByRole('radio', { name: 'Character reference' }).click();
 
-  await page.getByRole('button', { name: /send to production/i }).click();
+  // Claude plans first (the demo runner returns a fixed plan); nothing is drawn until the designer approves it.
+  await page.getByRole('button', { name: /plan with claude/i }).click();
+  const plan = page.getByRole('region', { name: /claude’s design plan/i });
+  await expect(plan.getByLabel(/what the client wants/i)).toHaveValue(/^Demo plan/);
+  await expect(page.getByRole('list', { name: 'Checklist' })).toContainText(/ready to approve/i);
+  await noOverflow(page);
+  const concept = `Fox mascot waving, ${isMobile ? 'm' : 'd'}`;
+  await plan.getByLabel(/^concept/i).fill(concept);
+  await page.getByRole('button', { name: /approve plan and draw/i }).click();
 
   // Step 3
   await expect(h1(page, /^jobs$/i)).toBeVisible();
@@ -94,6 +102,14 @@ test('the whole job: choose artwork → brief → send → finished in Jobs', as
   await expect(job).toHaveAttribute('data-status', 'done', { timeout: 15000 });
   await expect(job).toContainText(/no artwork was made/i);
   await expect(job).toContainText('2d-artwork-photoshop-illustrator');
+
+  // The approved (edited) plan is saved with the job and handed to the drawing agent.
+  const jobId = /job (\S+)\s*$/.exec((await job.locator('.job-meta').textContent()) ?? '')?.[1];
+  expect(jobId).toBeTruthy();
+  const jobDir = path.join('test-results', 'production-jobs', jobId!);
+  const savedJob = JSON.parse(await readFile(path.join(jobDir, 'job.json'), 'utf8')) as { plan: { concept: string } | null };
+  expect(savedJob.plan?.concept).toBe(concept);
+  expect(await readFile(path.join(jobDir, 'prompt.txt'), 'utf8')).toMatch(/design plan the designer approved/);
 
   // The layered source is judged by the bridge (layer count read from the PSD) and can be downloaded.
   const psd = job.getByRole('link', { name: /download layered psd/i });

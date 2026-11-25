@@ -6,6 +6,7 @@
  *   GET  /api/production/jobs/:id/preview   the exported preview.png
  *   GET  /api/production/jobs/:id/files/artwork.psd|artwork.ai|handmade-job-sheet.md   a download
  *   POST /api/production/jobs/:id/hand-in/psd|ai   hand-made jobs: the designer uploads the artwork they drew
+ *   POST /api/production/plan          Claude reads the brief and returns a design plan for the designer to check (draws nothing)
  *   GET  /api/production/health        which runner is active
  *   GET  /api/production/skills        whether each skill named in production/skills.json is installed
  *
@@ -26,9 +27,10 @@ import { ensureAdobe, readRegisteredServers, shellArg } from './adobe';
 import { ensureDesignAssets } from './assets';
 import {
   accountProblem, DOWNLOAD_FILES, HAND_IN, HAND_MADE_SKILL, JOB_SHEET, MAX_HAND_IN_BYTES, SOURCE_FILES, applySkillChange, buildAgentPrompt,
-  handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest,
+  handmadeJobSheet, judgeHandIn, judgeResult, parseSkillFile, skillStatus, validateJobRequest, validatePlanRequest,
   type BridgeHealth, type DownloadFile, type HandInKind, type JobStatus, type JobView, type ProductionJob, type RunnerKind, type SkillUse, type SkillsState,
 } from '../src/state/production';
+import { buildPlanPrompt, demoPlan, planBriefData, readPlanReply, type DesignPlan } from '../src/state/plan';
 import {
   fakePsd, installSkill, listSkills, psdLayerCountOfFile, readSkillMap, readSkillText, saveCapped, skillDirs, skillInstallDir, writeSkillMap,
 } from './files';
@@ -37,6 +39,14 @@ const MAX_BODY_BYTES = 16 * 1024 * 1024;
 const AGENT_TIMEOUT_MS = 45 * 60 * 1000;
 /** The agent can draw in the Adobe apps and read/write files — no shell, no network tools. */
 const ALLOWED_TOOLS = 'mcp__photoshop,mcp__illustrator,mcp__design-assets,Skill,Read,Write,Edit,Glob,Grep';
+const PLAN_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_PLANS_AT_ONCE = 2;
+/**
+ * The planner only reads the brief and replies with JSON. It runs lean: no MCP servers, no skills or slash
+ * commands, and only project settings (so the user's plugins are not loaded) — about 6k tokens of context
+ * instead of several hundred thousand.
+ */
+const PLAN_ARGS = ['-p', '--output-format', 'json', '--tools', 'Read', '--allowedTools', 'Read', '--strict-mcp-config', '--disable-slash-commands', '--setting-sources', 'project'];
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 const JOB_ID = /^[a-z0-9]{12}$/;
 const PLACEHOLDER_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
@@ -132,6 +142,7 @@ export function productionBridge(): Plugin {
   const jobs = new Map<string, StoredJob>();
   const queue: string[] = [];
   let busy = false;
+  let planning = 0;
   let runner: RunnerKind = 'off';
   let detail = 'Checking for the Claude Code agent…';
 
@@ -299,6 +310,34 @@ export function productionBridge(): Plugin {
     }
   }
 
+  /**
+   * Claude reads the brief (as data, from brief.json) and replies with a design plan. Nothing is drawn and the
+   * Adobe apps are not touched, so this can run while a job is drawing. The folder is removed afterwards unless
+   * planning failed (its log helps find out why).
+   */
+  async function makePlan(job: ProductionJob, note: string | null, previous: DesignPlan | null): Promise<{ ok: true; plan: DesignPlan } | { ok: false; error: string }> {
+    if (runner === 'mock') {
+      await new Promise((r) => setTimeout(r, 300));
+      return { ok: true, plan: demoPlan(job) };
+    }
+    const dir = path.join(jobsDir, '.plans', randomBytes(6).toString('hex'));
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'brief.json'), JSON.stringify(planBriefData(job, { note, previous }), null, 2));
+    if (job.reference) await fs.writeFile(path.join(dir, `reference.${job.reference.ext}`), Buffer.from(job.reference.base64, 'base64'));
+    const mcpFile = path.join(dir, 'mcp.json');
+    await fs.writeFile(mcpFile, JSON.stringify({ mcpServers: {} }));
+    const logFile = path.join(dir, 'planner.log');
+    const prompt = buildPlanPrompt(job, dir);
+    const run = await runWithFallback(agentAccounts(process.env), async (acct) => {
+      await runProcess(claudeBin, agentArgs(PLAN_ARGS, acct, mcpFile), dir, prompt, PLAN_TIMEOUT_MS, logFile, agentEnv(process.env, acct));
+      const output = await fs.readFile(logFile, 'utf8').catch(() => '');
+      const reply = readPlanReply(output);
+      return { problem: reply.ok ? null : accountProblem(output.slice(-4000)), value: reply };
+    });
+    if (run.value.ok) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    return run.value;
+  }
+
   async function createJob(job: ProductionJob): Promise<StoredJob> {
     const id = randomBytes(6).toString('hex');
     const dir = path.join(jobsDir, id);
@@ -355,7 +394,7 @@ export function productionBridge(): Plugin {
       return send(res, 200, { jobs: list });
     }
 
-    if (req.method !== 'POST' || !['jobs', 'skills/assign', 'skills/add'].includes(route)) return handleFiles(req, res, route);
+    if (req.method !== 'POST' || !['jobs', 'plan', 'skills/assign', 'skills/add'].includes(route)) return handleFiles(req, res, route);
     // Every POST is JSON. Browsers can't send JSON to another site without asking first, which blocks other websites.
     if (!(req.headers['content-type'] ?? '').startsWith('application/json')) return send(res, 415, { error: 'Send JSON.' });
     let body: unknown;
@@ -399,6 +438,20 @@ export function productionBridge(): Plugin {
         }
         send(res, 201, { ...(await skillsState()), added: parsed.name, note });
       });
+    }
+
+    if (route === 'plan') {
+      if (runner === 'off') return send(res, 503, { error: `Claude can’t plan right now. ${detail}` });
+      const asked = validatePlanRequest((await skillsState()).map, body);
+      if (!asked.ok) return send(res, 400, { error: asked.errors.join(' ') });
+      if (planning >= MAX_PLANS_AT_ONCE) return send(res, 429, { error: 'Claude is already planning two jobs. Try again in a minute.' });
+      planning += 1;
+      try {
+        const made = await makePlan(asked.job, asked.note, asked.previous);
+        return made.ok ? send(res, 200, { plan: made.plan }) : send(res, 502, { error: made.error });
+      } finally {
+        planning -= 1;
+      }
     }
 
     // POST jobs

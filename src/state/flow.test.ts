@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialFlow, flowReducer, serialize, hydrate, type FlowAction, type FlowState } from './flow';
+import { initialFlow, flowReducer, planStatus, serialize, hydrate, type FlowAction, type FlowState } from './flow';
 
 const run = (actions: FlowAction[], from: FlowState = initialFlow()) => actions.reduce(flowReducer, from);
 
@@ -110,5 +110,44 @@ describe('saved on this device', () => {
     const bad = hydrate({ brief: { templateId: 'nope', artStyleId: '../../x', ratio: '9:99', prompt: 42, displayName: 'z'.repeat(999) } });
     expect(bad.brief).toMatchObject({ templateId: null, artStyleId: null, ratio: 'Auto', prompt: '' });
     expect(bad.brief.displayName).toHaveLength(60);
+  });
+});
+
+describe('the design plan: made for one brief, out of date when the brief changes', () => {
+  const plan = {
+    understood: 'A neon wolf logo.', concept: 'Wolf head in a shield.', composition: 'Centred.',
+    palette: [{ name: 'Night', hex: '#101020' }, { name: 'Neon', hex: '#00FFCC' }], typography: 'Orbitron.',
+    parts: [{ name: 'Shield', app: 'Illustrator' as const, detail: '' }], assets: [], assumptions: [], styleNote: null,
+  };
+  const filled = (): FlowState => run([
+    { type: 'pickTemplate', templateId: 'gaming-logo' },
+    { type: 'setArtStyle', artStyleId: 'flat-vector' },
+    { type: 'setPrompt', prompt: 'neon wolf' },
+  ]);
+
+  it('has no plan until Claude makes one; then it is current', () => {
+    expect(planStatus(filled())).toBe('none');
+    const s = run([{ type: 'planReady', plan }], filled());
+    expect(planStatus(s)).toBe('current');
+    expect(s.plan?.plan).toEqual(plan);
+  });
+
+  it('designer edits keep the plan current; changing the brief makes it out of date', () => {
+    const s = run([{ type: 'planReady', plan }, { type: 'editPlan', plan: { ...plan, concept: 'Wolf head, no shield.' } }], filled());
+    expect(planStatus(s)).toBe('current');
+    expect(s.plan?.plan.concept).toBe('Wolf head, no shield.');
+    for (const change of [
+      { type: 'setPrompt', prompt: 'neon fox' },
+      { type: 'setArtStyle', artStyleId: 'cartoon' },
+      { type: 'setDisplayName', name: 'Fox' },
+      { type: 'setRatio', ratio: 'Wide' },
+      { type: 'setReference', name: 'a.png', preview: 'data:x' },
+    ] as FlowAction[]) expect(planStatus(run([change], s))).toBe('outdated');
+  });
+
+  it('the plan is dropped once the job is sent, and never saved on the device', () => {
+    const s = run([{ type: 'planReady', plan }], filled());
+    expect(run([{ type: 'jobSent' }], s).plan).toBe(null);
+    expect(serialize(s)).not.toContain('Wolf head');
   });
 });

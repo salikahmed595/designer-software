@@ -18,6 +18,8 @@ const e2eDir = process.env.LUMORA_E2E_DIR;
 // Override with PW_CHANNEL=msedge, or PW_CHANNEL= (empty) after `npx playwright install chromium`.
 const channel = process.env.PW_CHANNEL ?? 'chrome';
 const ch = channel ? { channel } : {};
+// Port for the test copy of the studio; set E2E_PORT if 5174 is taken.
+const port = Number(process.env.E2E_PORT ?? 5174);
 
 export default defineConfig({
   testDir: './e2e',
@@ -26,7 +28,7 @@ export default defineConfig({
   // One at a time: the skill map is shared by every test, and some tests change it.
   workers: 1,
   use: {
-    baseURL: 'http://localhost:5174',
+    baseURL: `http://localhost:${port}`,
     trace: 'retain-on-failure',
   },
   projects: [
@@ -34,8 +36,8 @@ export default defineConfig({
     { name: 'mobile', use: { viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true, ...ch } },
   ],
   webServer: {
-    command: 'npx vite --port 5174 --strictPort',
-    url: 'http://localhost:5174',
+    command: `npx vite --port ${port} --strictPort`,
+    url: `http://localhost:${port}`,
     reuseExistingServer: false,
     // Never start a real agent from tests: the demo runner writes a placeholder instead.
     env: {

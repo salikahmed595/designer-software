@@ -6,9 +6,22 @@ import { CATEGORIES, HOME_POPULAR, TEMPLATES } from './state/catalog';
 import shipped from '../production/skills.json';
 import { ART_STYLES, applySkillChange, normalizeSkillMap, parseSkillFile, type InstalledSkill, type SkillMap } from './state/production';
 import { hasArt, indexThumbnails } from './glass/Thumb';
+import type { DesignPlan } from './state/plan';
 
 type Runner = 'claude' | 'off';
-interface StubOptions { jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string; rejectHandIn?: string }
+interface StubOptions { jobs?: unknown[]; installed?: string[]; rejectPost?: string; fileError?: string; rejectHandIn?: string; rejectPlan?: string; plan?: DesignPlan }
+
+const PLAN: DesignPlan = {
+  understood: 'A gamer portrait of a wolf wearing a neon headset.',
+  concept: 'Confident wolf, cyan rim light.',
+  composition: 'Head and shoulders, centred, readable in a circle.',
+  palette: [{ name: 'Night', hex: '#101020' }, { name: 'Neon cyan', hex: '#00E5FF' }],
+  typography: 'Orbitron for the gamertag.',
+  parts: [{ name: 'Background', app: 'Photoshop', detail: 'Dark gradient' }, { name: 'Wolf > Head', app: 'Illustrator', detail: 'Clean shapes' }],
+  assets: ['A display font'],
+  assumptions: ['No colours were given, so night blue and neon cyan.'],
+  styleNote: null,
+};
 
 const SHIPPED = normalizeSkillMap(shipped)!;
 const ALL_INSTALLED = ['2d-artwork-photoshop-illustrator', '2d-pfp', '2dvector-photoshop-illustrator-salik', 'hand-made', 'vtuber-master'];
@@ -18,6 +31,7 @@ function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {
   const posted: unknown[] = [];
   const skillCalls: { path: string; body: unknown }[] = [];
   const handIns: { url: string; contentType: string | undefined; body: unknown }[] = [];
+  const planCalls: Record<string, unknown>[] = [];
   const jobs: unknown[] = [...(opts.jobs ?? [])];
   let map: SkillMap = structuredClone(SHIPPED);
   const installed: InstalledSkill[] = (opts.installed ?? ALL_INSTALLED).map((name) => ({ name, description: `About ${name}` }));
@@ -59,6 +73,11 @@ function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {
       job.handedInAt = 1_700_000_000_000;
       return json({ job });
     }
+    if (url.endsWith('/plan') && init?.method === 'POST') {
+      planCalls.push(JSON.parse(String(init.body)));
+      if (opts.rejectPlan) return json({ error: opts.rejectPlan }, 502);
+      return json({ plan: structuredClone(opts.plan ?? PLAN) });
+    }
     if (url.endsWith('/jobs') && init?.method === 'POST') {
       if (opts.rejectPost) return json({ error: opts.rejectPost }, 409);
       const body = JSON.parse(String(init.body));
@@ -68,7 +87,7 @@ function stubBridge(runner: Runner | 'offline' = 'claude', opts: StubOptions = {
     }
     return json({ jobs: structuredClone(jobs) }); // a real fetch returns new objects every time
   }));
-  return { posted, skillCalls, handIns, currentMap: () => map };
+  return { posted, skillCalls, handIns, planCalls, currentMap: () => map };
 }
 
 beforeEach(() => window.localStorage.clear());
@@ -196,18 +215,20 @@ describe('step 2 — the brief', () => {
     await openBrief(user);
     await user.click(screen.getByRole('radio', { name: /cinematic pfp/i }));
     await user.type(screen.getByLabelText(/paste the client’s brief/i), 'A wolf gamer');
-    await user.click(screen.getByRole('button', { name: /send to production/i }));
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    await user.click(await screen.findByRole('button', { name: /approve plan and draw/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/“anime-art” is not installed/);
     expect(heading(/brief for gaming avatar/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/paste the client’s brief/i)).toHaveValue('A wolf gamer');
   });
 
-  it('explains what is missing instead of sending an incomplete job', async () => {
-    const { user, posted } = setup();
+  it('explains what is missing instead of planning or sending an incomplete job', async () => {
+    const { user, posted, planCalls } = setup();
     await openBrief(user);
-    await user.click(screen.getByRole('button', { name: /send to production/i }));
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
     expect(screen.getAllByRole('alert').map((a) => a.textContent)).toEqual(expect.arrayContaining(['Choose an art style.', 'Write the client brief.']));
     expect(posted).toHaveLength(0);
+    expect(planCalls).toHaveLength(0);
   });
 
   it('changing the artwork keeps what was already filled in', async () => {
@@ -231,10 +252,11 @@ describe('step 2 — the brief', () => {
     await user.type(screen.getByLabelText(/paste the client’s brief/i), 'A wolf gamer with a neon headset');
     await user.type(screen.getByLabelText(/gamertag/i), 'NightWolf');
     await user.click(within(screen.getByRole('radiogroup', { name: 'Size' })).getByRole('radio', { name: 'Square' }));
-    await user.click(screen.getByRole('button', { name: /send to production/i }));
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    await user.click(await screen.findByRole('button', { name: /approve plan and draw/i }));
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Jobs' })).toBeInTheDocument();
-    expect(posted).toEqual([{ styleId: 'pfp-cinematic', ratio: 'Square', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: 'NightWolf', reference: null }]);
+    expect(posted).toEqual([{ styleId: 'pfp-cinematic', ratio: 'Square', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: 'NightWolf', reference: null, plan: PLAN }]);
     const job = within(screen.getByRole('list', { name: 'Jobs' })).getByRole('listitem');
     expect(job).toHaveTextContent(/gaming avatar/i);
     expect(job).toHaveTextContent(/waiting/i);
@@ -242,6 +264,85 @@ describe('step 2 — the brief', () => {
 
     await user.click(within(screen.getByRole('navigation', { name: 'Primary' })).getByRole('button', { name: 'New artwork' }));
     expect(screen.queryByText(/unfinished brief/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('step 3 — Claude plans the design, the designer approves it', () => {
+  const fillBrief = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(within(artwork()).getByRole('button', { name: /gaming avatar/i }));
+    await user.click(screen.getByRole('radio', { name: /cinematic pfp/i }));
+    await user.type(screen.getByLabelText(/paste the client’s brief/i), 'A wolf gamer with a neon headset');
+  };
+  const planPanel = () => screen.getByRole('region', { name: /claude’s design plan/i });
+
+  it('Claude reads the brief first and shows what it understood; nothing is drawn yet', async () => {
+    const { user, planCalls, posted } = setup();
+    await fillBrief(user);
+    expect(screen.queryByRole('button', { name: /approve plan and draw/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    expect(await screen.findByLabelText(/what the client wants/i)).toHaveValue(PLAN.understood);
+    expect(planCalls).toEqual([{ styleId: 'pfp-cinematic', ratio: 'Auto', brief: 'A wolf gamer with a neon headset', templateId: 'gaming-avatar', text: '', reference: null }]);
+    expect(posted).toHaveLength(0);
+    expect(within(planPanel()).getByLabelText(/^concept/i)).toHaveValue(PLAN.concept);
+    expect(within(planPanel()).getByDisplayValue('#00E5FF')).toBeInTheDocument();
+    expect(within(planPanel()).getByDisplayValue('Wolf > Head')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Checklist' })).toHaveTextContent(/design plan\s*ready to approve/i);
+  });
+
+  it('the designer edits the plan, and the edited plan is what gets drawn', async () => {
+    const { user, posted } = setup();
+    await fillBrief(user);
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    const concept = await screen.findByLabelText(/^concept/i);
+    await user.clear(concept);
+    await user.type(concept, 'Wolf with a gold headset');
+    await user.click(screen.getByRole('button', { name: /approve plan and draw/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Jobs' });
+    expect((posted[0] as { plan: DesignPlan }).plan.concept).toBe('Wolf with a gold headset');
+  });
+
+  it('redo with a note sends the note and the current plan for Claude to revise', async () => {
+    const { user, planCalls } = setup('claude', { plan: { ...PLAN, styleNote: 'Cartoon would suit a younger audience.' } });
+    await fillBrief(user);
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    expect(await screen.findByText(/cartoon would suit a younger audience/i)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/what should claude change/i), 'Make it warmer');
+    await user.click(screen.getByRole('button', { name: /redo the plan/i }));
+    await vi.waitFor(() => expect(planCalls).toHaveLength(2));
+    expect(planCalls[1]).toMatchObject({ note: 'Make it warmer', previous: { concept: PLAN.concept } });
+  });
+
+  it('changing the brief makes the plan out of date, so it is planned again before drawing', async () => {
+    const { user, posted } = setup();
+    await fillBrief(user);
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    await screen.findByLabelText(/what the client wants/i);
+    await user.type(screen.getByLabelText(/paste the client’s brief/i), ' and a scar');
+    expect(screen.getByText(/you changed the brief after this plan/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /approve plan and draw/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    await user.click(await screen.findByRole('button', { name: /approve plan and draw/i }));
+    await screen.findByRole('heading', { level: 1, name: 'Jobs' });
+    expect(posted).toHaveLength(1);
+  });
+
+  it('says why planning failed and keeps the brief', async () => {
+    const { user, posted } = setup('claude', { rejectPlan: 'Claude’s reply was not a plan. Try again.' });
+    await fillBrief(user);
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/not a plan\. try again/i);
+    expect(screen.getByLabelText(/paste the client’s brief/i)).toHaveValue('A wolf gamer with a neon headset');
+    expect(posted).toHaveLength(0);
+  });
+
+  it('will not draw an edited plan that lost its parts', async () => {
+    const { user, posted } = setup('claude', { plan: { ...PLAN, parts: [PLAN.parts[0]] } });
+    await fillBrief(user);
+    await user.click(screen.getByRole('button', { name: /plan with claude/i }));
+    await user.clear(await screen.findByDisplayValue('Background'));
+    await user.click(screen.getByRole('button', { name: /approve plan and draw/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/must list the parts to draw/i);
+    expect(posted).toHaveLength(0);
   });
 });
 

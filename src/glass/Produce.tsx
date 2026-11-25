@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getTemplate } from '../state/catalog';
-import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS } from '../state/flow';
+import { MAX_BRIEF_CHARS, MAX_TEXT, PICKABLE_REF_ROLES, RATIOS, planStatus } from '../state/flow';
+import { parsePlan, type DesignPlan } from '../state/plan';
+import { PlanPanel } from './PlanPanel';
 import {
   ART_STYLES, HAND_IN, JOB_SHEET, getArtStyle, handInFileIssue, productionIssues, ratioLabel, skillsFor,
   type BridgeHealth, type HandInKind, type HandmadeMode, type JobView, type SkillMap, type SkillRole, type SkillUse,
@@ -11,6 +13,7 @@ import { Thumb } from './Thumb';
 import type { PageProps } from './pages';
 
 const OFFLINE: BridgeHealth = { online: false, runner: 'off', detail: 'Production is offline. Start the studio app with “npm run dev” on the computer that has Photoshop and Illustrator.' };
+const PLAN_LABEL = { none: 'Not made yet', current: 'Ready to approve', outdated: 'Out of date — plan again' } as const;
 const STATUS_LABEL: Record<JobView['status'], string> = { queued: 'Waiting', running: 'Drawing…', done: 'Finished', failed: 'Needs attention' };
 const ROLE_LABEL: Record<SkillRole, string> = { style: 'Art style', artwork: 'Artwork', general: 'General skill' };
 const HANDMADE_LABEL: Record<HandmadeMode, string> = {
@@ -54,6 +57,8 @@ export interface Bridge {
   activeJobs: number;
   refresh: () => Promise<void>;
   send: (job: unknown) => Promise<void>;
+  /** Claude reads the brief and returns a design plan (nothing is drawn) */
+  plan: (request: unknown) => Promise<DesignPlan>;
   /** hand-made jobs: upload the artwork the designer drew */
   handIn: (id: string, kind: HandInKind, file: File) => Promise<void>;
 }
@@ -97,7 +102,14 @@ export function useProductionBridge(): Bridge {
     await refresh();
   }, [refresh]);
 
-  return { health, jobs, activeJobs, refresh, send, handIn };
+  const plan = useCallback(async (request: unknown) => {
+    const body = await api<{ plan?: unknown }>('plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+    const parsed = parsePlan(body.plan);
+    if (!parsed.ok) throw new Error(`Claude’s plan was incomplete (${parsed.error}). Try again.`);
+    return parsed.plan;
+  }, []);
+
+  return { health, jobs, activeJobs, refresh, send, plan, handIn };
 }
 
 /** Shown only when something needs attention; a healthy connection gets a quiet one-line confirmation. */
@@ -111,13 +123,17 @@ export function BridgeNote({ health }: { health: BridgeHealth | null }) {
 export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }: PageProps & { bridge: Bridge; skillMap: SkillMap | null }) {
   const { brief } = state;
   const [sending, setSending] = useState(false);
+  const [planning, setPlanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const plan = planStatus(state);
   const template = getTemplate(brief.templateId);
   const style = getArtStyle(brief.artStyleId);
   const tried = state.showErrors;
   const issues = productionIssues({ templateId: brief.templateId, artStyleId: brief.artStyleId, brief: brief.prompt, hasReference: Boolean(brief.referenceName), referenceRole: brief.referenceRole });
   const online = bridge.health?.online === true;
   const canRun = online && bridge.health?.runner !== 'off';
+  /** Claude plans first whenever an agent can run; without one, the job is only saved, so there is no plan step. */
+  const canPlan = canRun;
   const briefDone = brief.prompt.trim() !== '';
   const referenceDone = !brief.referenceName || Boolean(brief.referenceRole);
 
@@ -132,19 +148,47 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
     );
   }
 
+  const jobRequest = (styleId: string) => ({
+    styleId,
+    ratio: brief.ratio,
+    brief: brief.prompt,
+    templateId: brief.templateId,
+    text: brief.displayName,
+    reference: brief.referenceName && state.referencePreview && brief.referenceRole ? { dataUrl: state.referencePreview, role: brief.referenceRole } : null,
+  });
+
+  /** Claude reads the brief (and, on a redo, the designer's note and the current plan) and writes the plan. */
+  const makePlan = async (redo?: { note: string; previous: DesignPlan }): Promise<boolean> => {
+    setError(null);
+    if (issues.length > 0 || !style) {
+      dispatch({ type: 'showErrors' });
+      return false;
+    }
+    setPlanning(true);
+    try {
+      dispatch({ type: 'planReady', plan: await bridge.plan({ ...jobRequest(style.id), ...redo }) });
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Claude could not make the plan. Try again.');
+      return false;
+    } finally {
+      setPlanning(false);
+    }
+  };
+
   const submit = async () => {
     setError(null);
     if (issues.length > 0 || !style) return dispatch({ type: 'showErrors' });
+    if (canPlan && plan !== 'current') return void makePlan();
+    let approved: DesignPlan | null = null;
+    if (canPlan && state.plan) {
+      const checked = parsePlan(state.plan.plan);
+      if (!checked.ok) return setError(`Fix the plan first: ${checked.error}`);
+      approved = checked.plan;
+    }
     setSending(true);
     try {
-      await bridge.send({
-        styleId: style.id,
-        ratio: brief.ratio,
-        brief: brief.prompt,
-        templateId: brief.templateId,
-        text: brief.displayName,
-        reference: brief.referenceName && state.referencePreview && brief.referenceRole ? { dataUrl: state.referencePreview, role: brief.referenceRole } : null,
-      });
+      await bridge.send(approved ? { ...jobRequest(style.id), plan: approved } : jobRequest(style.id));
       dispatch({ type: 'jobSent' });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The job could not be sent.');
@@ -159,7 +203,10 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
     ['Client brief', briefDone, briefDone ? 'Written' : 'Not written yet'],
     ['Reference', referenceDone, brief.referenceName ? (brief.referenceRole ?? 'Say how to use it') : 'None (optional)'],
     ['Size', true, ratioLabel(brief.ratio)],
+    ...(canPlan ? [['Design plan', plan === 'current', PLAN_LABEL[plan]] as [string, boolean, string]] : []),
   ];
+  const busy = sending || planning;
+  const buttonLabel = sending ? 'Sending…' : planning ? 'Claude is planning…' : !canPlan ? 'Send to production' : plan === 'current' ? 'Approve plan and draw' : plan === 'outdated' ? 'Plan with Claude again' : 'Plan with Claude';
 
   return (
     <section className="stage">
@@ -167,7 +214,7 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
       <div className="stage-head">
         <div>
           <h1 id="page-title" tabIndex={-1}>Brief for {template.title}</h1>
-          <p className="stage-sub">Four quick things, then the agent draws it in Photoshop and Illustrator.</p>
+          <p className="stage-sub">Four quick things. Claude plans the design, you approve it, then it is drawn in Photoshop and Illustrator.</p>
         </div>
         <button type="button" className="btn" onClick={() => dispatch({ type: 'back' })}><span aria-hidden>← </span>Change artwork</button>
       </div>
@@ -267,6 +314,17 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
               })}
             </div>
           </div>
+
+          {canPlan && state.plan && (
+            <PlanPanel
+              plan={state.plan.plan}
+              madeIn={template.madeIn}
+              outdated={plan === 'outdated'}
+              busy={busy}
+              onChange={(p) => dispatch({ type: 'editPlan', plan: p })}
+              onRedo={(note) => (state.plan ? makePlan({ note, previous: state.plan.plan }) : Promise.resolve(false))}
+            />
+          )}
         </div>
 
         <aside className="glass panel summary-panel" aria-label="Your job">
@@ -287,14 +345,17 @@ export function BriefPage({ state, dispatch, onAddReference, bridge, skillMap }:
               <ul className="bundle-list">{template.bundle.map((b) => <li key={b}>{b}</li>)}</ul>
             </div>
           )}
-          <button type="submit" className="btn btn-primary btn-big" disabled={sending || !online}>
-            {sending ? 'Sending…' : 'Send to production'} <span aria-hidden>→</span>
+          <button type="submit" className="btn btn-primary btn-big" disabled={busy || !online}>
+            {buttonLabel} <span aria-hidden>→</span>
           </button>
+          {planning && <p className="sr-only" role="status">Claude is reading the brief and planning the design. This takes about a minute.</p>}
           <p className="next-hint">
             {error ? <span role="alert" className="field-error">{error}</span>
               : tried && issues.length > 0 ? <span className="field-error">{issues.length === 1 ? issues[0] : `${issues.length} things still needed — see the red notes.`}</span>
               : !online ? 'Production is offline, so nothing can be sent yet.'
-              : canRun ? 'One job is drawn at a time. You can start the next brief straight away.'
+              : planning ? 'Claude is reading the brief and planning the design (about a minute).'
+              : canPlan && plan === 'current' ? 'Check the plan, change anything, then approve it. One job is drawn at a time.'
+              : canPlan ? 'Claude reads the brief and writes a plan first. Nothing is drawn until you approve it.'
               : 'The job will be saved, but it can’t start until the agent is available.'}
           </p>
           {skillMap && <DrawnWith skills={skillsFor(skillMap, template.id, style?.id)} />}

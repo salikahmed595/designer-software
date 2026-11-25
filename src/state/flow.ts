@@ -6,6 +6,7 @@
  * plus "skills" — add skills, choose the default skill and which skill draws each style and artwork
  */
 import { getTemplate } from './catalog';
+import type { DesignPlan } from './plan';
 
 export type Page = 'home' | 'brief' | 'jobs' | 'skills';
 
@@ -44,6 +45,8 @@ export interface FlowState {
   referencePreview: string | null;
   showErrors: boolean;
   notice: string | null;
+  /** Claude's design plan and the brief it was made for (never saved on the device) */
+  plan: { plan: DesignPlan; forBrief: string } | null;
 }
 
 export type FlowAction =
@@ -64,7 +67,10 @@ export type FlowAction =
   | { type: 'showErrors' }
   | { type: 'jobSent' }
   | { type: 'notify'; message: string }
-  | { type: 'dismissNotice' };
+  | { type: 'dismissNotice' }
+  | { type: 'planReady'; plan: DesignPlan }
+  | { type: 'editPlan'; plan: DesignPlan }
+  | { type: 'discardPlan' };
 
 const emptyBrief = (): Brief => ({
   templateId: null, artStyleId: null, prompt: '', displayName: '', referenceName: null, referenceRole: null, ratio: 'Auto',
@@ -81,7 +87,15 @@ export function cleanChanges(raw: unknown): string[] {
     .slice(0, MAX_CHANGES);
 }
 
-export const initialFlow = (): FlowState => ({ page: 'home', brief: emptyBrief(), referencePreview: null, showErrors: false, notice: null });
+export const initialFlow = (): FlowState => ({ page: 'home', brief: emptyBrief(), referencePreview: null, showErrors: false, notice: null, plan: null });
+
+/** Everything Claude planned from: if any of it changes, the plan is out of date. */
+export const briefSignature = (b: Brief): string =>
+  JSON.stringify([b.templateId, b.artStyleId, b.prompt.trim(), b.displayName.trim(), b.ratio, b.referenceName, b.referenceRole]);
+
+export type PlanStatus = 'none' | 'current' | 'outdated';
+export const planStatus = (state: FlowState): PlanStatus =>
+  !state.plan ? 'none' : state.plan.forBrief === briefSignature(state.brief) ? 'current' : 'outdated';
 
 const patch = (state: FlowState, brief: Partial<Brief>): FlowState => ({ ...state, brief: { ...state.brief, ...brief } });
 
@@ -124,6 +138,12 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return { ...state, notice: action.message };
     case 'dismissNotice':
       return { ...state, notice: null };
+    case 'planReady':
+      return { ...state, plan: { plan: action.plan, forBrief: briefSignature(state.brief) } };
+    case 'editPlan':
+      return state.plan ? { ...state, plan: { ...state.plan, plan: action.plan } } : state;
+    case 'discardPlan':
+      return { ...state, plan: null };
   }
 }
 
