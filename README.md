@@ -30,6 +30,7 @@ npm run build
 
 ## How production works
 
+0. **Claude plans first.** On the Brief screen, **Plan with Claude** sends the brief to `POST /api/production/plan`. A short, tool-less Claude call reads it from `brief.json`, as data and never as instructions, and returns a design plan. The plan covers what the client wants, the concept, composition, colours, typography, the parts to draw (each in Photoshop or Illustrator), free assets to look for, and the choices it made. It can also suggest a better art style. The designer edits any of it, or asks Claude to redo it with a note, then presses **Approve plan and draw**. If the brief changes after planning, the plan is marked out of date and must be made again. The plan is checked on both sides (`src/state/plan.ts`), saved in `job.json`, and the drawing agent is told to follow it. The demo runner returns a fixed plan without calling Claude.
 1. The dev server's local bridge (`server/plugin.ts`) checks the request and writes `production/jobs/<id>/` with `job.json`, the reference image and `prompt.txt` (the agent's instructions).
 2. It starts a Claude Code agent in that folder, one job at a time. The agent may use only the `photoshop` and `illustrator` tool servers plus file tools — no command line.
 3. The agent loads the job's skills (see below), draws by hand — no AI image generation — and saves layered `output/artwork.psd` and/or `output/artwork.ai`, a flattened `output/preview.png` and `output/result.json`.
